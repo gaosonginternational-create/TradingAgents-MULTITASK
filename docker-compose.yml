@@ -5,10 +5,12 @@ services:
       - .env
     environment:
       - TZ=Asia/Shanghai
-      - HTTP_PROXY=http://host.docker.internal:10793
-      - HTTPS_PROXY=http://host.docker.internal:10793
-      - http_proxy=http://host.docker.internal:10793
-      - https_proxy=http://host.docker.internal:10793
+      # 代理为可选：需要翻墙访问外网时，在 .env 里设置 HOST_PROXY（如
+      # HOST_PROXY=http://host.docker.internal:10793）。默认不启用，开箱即用。
+      - HTTP_PROXY=${HOST_PROXY:-}
+      - HTTPS_PROXY=${HOST_PROXY:-}
+      - http_proxy=${HOST_PROXY:-}
+      - https_proxy=${HOST_PROXY:-}
       - NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.deepseek.com,.deepseek.com,api.stlouisfed.org,.stlouisfed.org,api.alphavantage.co,.alphavantage.co
     extra_hosts:
       - "host.docker.internal:host-gateway"
