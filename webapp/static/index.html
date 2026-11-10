@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradingAgents 工作台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">TA</div>
+      <div class="logo-text">
+        <div class="logo-title">TradingAgents</div>
+        <div class="logo-sub">多智能体金融分析工作台</div>
+      </div>
+    </div>
+
+    <button class="btn-new" onclick="showNewAnalysis()">+ 发起新分析</button>
+
+    <div class="side-section">
+      <div class="side-label">
+        <span>历史报告</span>
+      </div>
+      <div class="report-list" id="reportList"></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">
+        <span>任务记录</span>
+        <button class="side-action" id="btnClearTasks" onclick="clearAllTasks()" title="清空全部任务记录">清空</button>
+      </div>
+      <div class="task-list" id="taskList"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="footer-status" id="serverStatus">● 服务运行中</div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <!-- 空状态 -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">📊</div>
+      <h2>欢迎使用 TradingAgents 工作台</h2>
+      <p>从左侧选择一份历史报告查看，或发起一次新的智能分析。</p>
+      <button class="btn-primary" onclick="showNewAnalysis()">发起新分析</button>
+    </div>
+
+    <!-- 报告查看器 -->
+    <div class="report-viewer" id="reportViewer" style="display:none;">
+      <div class="viewer-header">
+        <div class="viewer-title" id="viewerTitle">报告</div>
+        <div class="viewer-actions">
+          <div class="view-tabs">
+            <button class="tab active" data-view="md" onclick="switchView('md')">报告正文</button>
+            <button class="tab" data-view="stages" onclick="switchView('stages')">分析流程</button>
+          </div>
+          <button class="btn-ghost" onclick="openHtml()">在新窗口打开 HTML</button>
+        </div>
+      </div>
+      <div class="viewer-body">
+        <div class="view-pane" id="viewMd">
+          <article class="markdown" id="mdContent"></article>
+        </div>
+        <div class="view-pane" id="viewStages" style="display:none;">
+          <div class="stages-container" id="stagesContainer"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新分析表单 -->
+    <div class="new-analysis" id="newAnalysis" style="display:none;">
+      <div class="viewer-header">
+        <div class="viewer-title">发起新分析</div>
+      </div>
+      <div class="form-card">
+        <div class="form-row">
+          <label>股票代码 <span class="hint">（美股 AAPL / 港股 0700.HK / A股 600519）</span></label>
+          <input type="text" id="inpTicker" placeholder="例如：AAPL、0700.HK、600519" autocomplete="off" oninput="detectMarket()">
+          <div class="market-hint" id="marketHint"></div>
+        </div>
+        <div class="form-row">
+          <label>分析日期</label>
+          <input type="date" id="inpDate">
+        </div>
+        <div class="form-row">
+          <label>选择分析师团队</label>
+          <div class="analyst-options">
+            <label class="chk"><input type="checkbox" value="market" checked> 市场（技术面）</label>
+            <label class="chk"><input type="checkbox" value="sentiment" checked> 情绪</label>
+            <label class="chk"><input type="checkbox" value="news" checked> 新闻</label>
+            <label class="chk"><input type="checkbox" value="fundamentals" checked> 基本面</label>
+          </div>
+        </div>
+        <div class="form-note">⚠️ 运行前请确保 Docker Desktop 已启动、VPN 已开启（美股需访问 Yahoo/Reddit；A股/港股走 AkShare 直连）。</div>
+        <button class="btn-primary" id="btnStart" onclick="startAnalysis()">开始分析</button>
+      </div>
+
+      <!-- 运行进度 -->
+      <div class="progress-card" id="progressCard" style="display:none;">
+        <div class="progress-head">
+          <div class="progress-title" id="progressTitle">分析进行中...</div>
+          <div class="progress-status" id="progressStatus">运行中</div>
+          <button class="btn-cancel" id="btnCancel" onclick="cancelAnalysis()">取消分析</button>
+        </div>
+        <div class="log-console" id="logConsole"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
