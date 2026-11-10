@@ -15,6 +15,11 @@ from tradingagents.dataflows.vendors.akshare.stock import get_stock
 from tradingagents.dataflows.vendors.akshare.fundamentals import get_fundamentals
 from tradingagents.dataflows.vendors.akshare.news import get_news, get_global_news
 from tradingagents.dataflows.vendors.akshare.valuation import get_valuation, get_etf_fundamentals
+from tradingagents.dataflows.vendors.akshare.statements import (
+    get_balance_sheet,
+    get_cashflow,
+    get_income_statement,
+)
 
 __all__ = [
     "get_stock",
@@ -23,4 +28,7 @@ __all__ = [
     "get_global_news",
     "get_valuation",
     "get_etf_fundamentals",
+    "get_income_statement",
+    "get_balance_sheet",
+    "get_cashflow",
 ]

@@ -7,8 +7,11 @@ from tradingagents.dataflows.errors import (
     VendorUnavailableError,
 )
 from tradingagents.dataflows.vendors.akshare import (
+    get_balance_sheet as get_akshare_balance_sheet,
+    get_cashflow as get_akshare_cashflow,
     get_fundamentals as get_akshare_fundamentals,
     get_global_news as get_akshare_global_news,
+    get_income_statement as get_akshare_income_statement,
     get_news as get_akshare_news,
     get_stock as get_akshare_stock,
     get_valuation as get_akshare_valuation,
@@ -130,16 +133,19 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "sec_edgar": get_sec_edgar_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
+        "akshare": get_akshare_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
         "sec_edgar": get_sec_edgar_cashflow,
         "yfinance": get_yfinance_cashflow,
+        "akshare": get_akshare_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
         "sec_edgar": get_sec_edgar_income_statement,
         "yfinance": get_yfinance_income_statement,
+        "akshare": get_akshare_income_statement,
     },
     # news_data
     "get_news": {
@@ -248,7 +254,14 @@ def route_to_vendor(method: str, *args, **kwargs):
     # it, so put akshare first to serve it directly instead of burning through
     # failing US vendors on every news call. The configured order still applies
     # to US tickers and to all other categories.
-    if method in ("get_news", "get_global_news", "get_valuation") and args:
+    if method in (
+        "get_news",
+        "get_global_news",
+        "get_valuation",
+        "get_income_statement",
+        "get_balance_sheet",
+        "get_cashflow",
+    ) and args:
         first_arg = args[0]
         if isinstance(first_arg, str) and is_cn_market(first_arg):
             if "akshare" in vendor_chain:
