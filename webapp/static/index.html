@@ -22,8 +22,16 @@
     <div class="side-section">
       <div class="side-label">
         <span>历史报告</span>
+        <span class="side-count" id="reportCount"></span>
       </div>
       <div class="report-list" id="reportList"></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">
+        <span>定时任务</span>
+        <button class="side-action" onclick="openSchedules()" title="管理定时分析任务">管理</button>
+      </div>
     </div>
 
     <div class="side-section">
@@ -68,6 +76,33 @@
           <div class="stages-container" id="stagesContainer"></div>
         </div>
       </div>
+    </div>
+
+    <!-- 定时任务管理 -->
+    <div class="schedules-panel" id="schedulesPanel" style="display:none;">
+      <div class="viewer-header">
+        <div class="viewer-title">定时分析任务</div>
+        <div class="viewer-actions">
+          <span class="hint" style="color:var(--text-faint);font-size:12px;">到点后自动发起分析，报告按标的归档，供后续学习参考</span>
+        </div>
+      </div>
+      <div class="form-card">
+        <div class="form-row">
+          <label>添加标的（股票/ETF 代码）</label>
+          <div class="schedule-add-row">
+            <input type="text" id="inpSchedTicker" placeholder="例如：600519、510300、NVDA" autocomplete="off">
+            <select id="inpSchedHour">
+              <option value="23">23:00</option>
+              <option value="0">00:00</option>
+              <option value="1">01:00</option>
+              <option value="2">02:00</option>
+            </select>
+            <button class="btn-primary" onclick="addSchedule()">添加</button>
+          </div>
+        </div>
+        <div class="form-note">⚠️ 定时任务触发时需保证 Docker 已启动、VPN 已开启（美股需要）。默认每天 23:00 触发，支持切换小时。</div>
+      </div>
+      <div class="schedule-list" id="scheduleList"></div>
     </div>
 
     <!-- 新分析表单 -->

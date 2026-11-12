@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,7 +23,12 @@ REPORTS_DIR = os.path.join(BASE_DIR, "data", "logs", "reports")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 TASKS_FILE = os.path.join(BASE_DIR, "data", "logs", "tasks.json")
 COMPANY_NAMES_FILE = os.path.join(BASE_DIR, "data", "logs", "company_names.json")
+SCHEDULES_FILE = os.path.join(BASE_DIR, "data", "logs", "schedules.json")
 PORT = 8765
+
+# 定时任务默认触发时间（每天 23:00 后开始；实际是"当天 23:00 起、下次运行前"这个窗口内触发一次）
+SCHEDULE_HOUR = 23
+SCHEDULE_MINUTE = 0
 
 # ANSI 转义序列（颜色码、光标控制）与 tqdm 进度条控制字符，清理后写入日志/SSE，
 # 避免前端日志控制台显示乱码。
@@ -280,6 +286,92 @@ def _save_tasks_history():
 TASKS_HISTORY = _load_tasks_history()  # task_id -> 轻量元数据（重启后仍可读）
 
 
+# ================= 定时任务 =================
+SCHEDULES_LOCK = threading.Lock()
+
+
+def _load_schedules():
+    """从磁盘加载定时任务配置。返回 {ticker: {enabled, hour, minute, analysts}}。"""
+    if os.path.exists(SCHEDULES_FILE):
+        try:
+            with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _write_schedules(data):
+    try:
+        os.makedirs(os.path.dirname(SCHEDULES_FILE), exist_ok=True)
+        tmp = SCHEDULES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SCHEDULES_FILE)
+    except Exception:
+        pass
+
+
+SCHEDULES = _load_schedules()
+
+# 记录每个 ticker 上一次触发调度的日期（YYYY-MM-DD），防止同一天重复触发
+_last_schedule_trigger = {}
+
+
+def _should_trigger(ticker: str, cfg: dict) -> bool:
+    """判断某 ticker 的定时任务此刻是否该触发。"""
+    if not cfg.get("enabled", False):
+        return False
+    hour = int(cfg.get("hour", SCHEDULE_HOUR))
+    minute = int(cfg.get("minute", SCHEDULE_MINUTE))
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    # 已过设定的触发时刻（HH:MM），且今天尚未触发过
+    if (now.hour, now.minute) >= (hour, minute):
+        if _last_schedule_trigger.get(ticker) != today:
+            return True
+    return False
+
+
+def _trigger_scheduled_analysis(ticker: str, cfg: dict):
+    """触发一次定时分析，复用 /api/analyze 的底层 run_analysis。"""
+    analysts = cfg.get("analysts", "market,sentiment,news,fundamentals")
+    date = datetime.now().strftime("%Y-%m-%d")
+    task_id = make_task_id()
+    with TASKS_LOCK:
+        RUNNING_TASKS[task_id] = {
+            "ticker": ticker,
+            "date": date,
+            "analysts": analysts,
+            "status": "starting",
+            "log_lines": [f"[定时任务] 自动触发 {ticker} 分析（{date}）"],
+            "exit_code": None,
+            "created_at": time.time(),
+            "finished_at": None,
+            "scheduled": True,
+        }
+    _save_tasks_history()
+    _last_schedule_trigger[ticker] = date
+    t = threading.Thread(target=run_analysis, args=(ticker, date, analysts, task_id), daemon=True)
+    t.start()
+
+
+def _scheduler_loop():
+    """后台调度线程：每分钟检查一次，触发到点的定时任务。"""
+    while True:
+        try:
+            with SCHEDULES_LOCK:
+                items = list(SCHEDULES.items())
+            for ticker, cfg in items:
+                if _should_trigger(ticker, cfg):
+                    _trigger_scheduled_analysis(ticker, cfg)
+        except Exception:
+            pass
+        time.sleep(60)  # 每分钟检查一次
+
+
 def list_reports():
     """列出所有历史报告（按时间倒序）"""
     items = []
@@ -332,6 +424,37 @@ def list_reports():
         })
     items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
+
+
+def list_report_groups():
+    """把历史报告按标的（ticker）聚合为文件夹结构。
+
+    返回 [{ticker, name, count, latest_rating, reports: [平铺 item...]}]
+    reports 内部仍沿用 list_reports 的 item 结构，前端可复用渲染逻辑。
+    """
+    flat = list_reports()
+    groups = {}
+    for item in flat:
+        key = item["ticker"].upper()
+        g = groups.get(key)
+        if g is None:
+            g = {
+                "ticker": item["ticker"],
+                "name": item["name"],
+                "count": 0,
+                "latest_rating": item["rating"],
+                "reports": [],
+            }
+            groups[key] = g
+        g["count"] += 1
+        # 首次（最新，因为 list_reports 已按 mtime 倒序）即为最新评级
+        if not g["latest_rating"] and item["rating"]:
+            g["latest_rating"] = item["rating"]
+        g["reports"].append(item)
+    # 按最近报告时间倒序排列文件夹
+    result = list(groups.values())
+    result.sort(key=lambda g: g["reports"][0]["mtime"], reverse=True)
+    return result
 
 
 def read_text(path, limit=None):
@@ -558,9 +681,19 @@ class Handler(BaseHTTPRequestHandler):
                 ct = "image/svg+xml"
             return self._send_file(safe, ct)
 
-        # API：报告列表
+        # API：报告列表（grouped=1 时返回按标的聚合的文件夹结构）
         if path == "/api/reports":
+            grouped = qs.get("grouped", ["0"])[0] == "1"
+            if grouped:
+                return self._send_json({"groups": list_report_groups()})
             return self._send_json({"reports": list_reports()})
+
+        # API：定时任务列表
+        if path == "/api/schedules":
+            with SCHEDULES_LOCK:
+                items = [{"ticker": t, **cfg} for t, cfg in SCHEDULES.items()]
+            items.sort(key=lambda x: x["ticker"])
+            return self._send_json({"schedules": items})
 
         # API：报告阶段树
         if path == "/api/report/stages":
@@ -605,6 +738,40 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+
+        # API：新增/更新定时任务
+        if path == "/api/schedules":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8", errors="ignore")
+            try:
+                req = json.loads(body)
+            except Exception:
+                return self._send_json({"error": "无效的 JSON"}, 400)
+            ticker = (req.get("ticker") or "").strip().upper()
+            if not re.match(r"^[\w.\-]{1,20}$", ticker):
+                return self._send_json({"error": "股票代码格式不合法"}, 400)
+            enabled = bool(req.get("enabled", True))
+            try:
+                hour = int(req.get("hour", SCHEDULE_HOUR))
+                minute = int(req.get("minute", SCHEDULE_MINUTE))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError
+            except (TypeError, ValueError):
+                return self._send_json({"error": "时间格式不合法"}, 400)
+            analysts = req.get("analysts") or "market,sentiment,news,fundamentals"
+            valid_analysts = {"market", "sentiment", "news", "fundamentals"}
+            analysts = ",".join(a for a in str(analysts).split(",") if a.strip() in valid_analysts)
+            if not analysts:
+                analysts = "market,sentiment,news,fundamentals"
+            with SCHEDULES_LOCK:
+                SCHEDULES[ticker] = {
+                    "enabled": enabled,
+                    "hour": hour,
+                    "minute": minute,
+                    "analysts": analysts,
+                }
+                _write_schedules(SCHEDULES)
+            return self._send_json({"status": "saved", "ticker": ticker})
 
         # API：取消分析任务
         if path == "/api/task/cancel":
@@ -667,6 +834,18 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
+
+        # 删除单个定时任务
+        if path == "/api/schedules":
+            ticker = qs.get("ticker", [""])[0].strip().upper()
+            if not ticker:
+                return self._send_json({"error": "缺少股票代码"}, 400)
+            with SCHEDULES_LOCK:
+                if ticker not in SCHEDULES:
+                    return self._send_json({"error": "定时任务不存在"}, 404)
+                del SCHEDULES[ticker]
+                _write_schedules(SCHEDULES)
+            return self._send_json({"status": "deleted"})
 
         # 删除单个任务记录
         if path == "/api/task":
@@ -746,8 +925,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(STATIC_DIR, exist_ok=True)
+    # 启动定时任务调度线程
+    scheduler = threading.Thread(target=_scheduler_loop, daemon=True)
+    scheduler.start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"TradingAgents 工作台已启动: http://127.0.0.1:{PORT}")
+    print(f"定时任务调度器已启动（每天 {SCHEDULE_HOUR}:{SCHEDULE_MINUTE:02d} 后触发到点任务）")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

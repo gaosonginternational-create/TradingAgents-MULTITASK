@@ -27,26 +27,52 @@ async function api(path, opts) {
   return res.json();
 }
 
-// ===== 报告列表 =====
+// ===== 报告列表（按标的分组为文件夹树） =====
+let expandedGroups = {};  // ticker -> true/false，记住展开状态
+
 async function loadReports() {
-  const data = await api('/api/reports');
+  const data = await api('/api/reports?grouped=1');
   if (!data) return;
   const list = document.getElementById('reportList');
-  if (!data.reports.length) {
+  const countEl = document.getElementById('reportCount');
+  const groups = data.groups || [];
+  if (!groups.length) {
     list.innerHTML = '<div style="color:var(--text-faint);font-size:12px;padding:8px;">暂无报告</div>';
+    if (countEl) countEl.textContent = '';
     return;
   }
-  list.innerHTML = data.reports.map(r => {
-    const label = r.name ? `${r.ticker} <span class="ri-name">${escapeHtml(r.name)}</span>` : r.ticker;
+  if (countEl) countEl.textContent = groups.length + ' 个标的';
+  list.innerHTML = groups.map(g => {
+    const key = g.ticker.toUpperCase();
+    const isOpen = expandedGroups[key] !== false; // 默认展开
+    const label = g.name ? `${g.ticker} <span class="ri-name">${escapeHtml(g.name)}</span>` : g.ticker;
+    const arrow = isOpen ? '▾' : '▸';
+    const latestBadge = ratingBadge(g.latest_rating);
+    const dailyItems = g.reports.map(r => {
+      const active = r.id === currentReportId ? 'active' : '';
+      return `
+      <div class="report-item sub ${active}">
+        <div class="ri-main" onclick="openReport('${r.id}','${r.ticker}')">
+          <div class="ri-ticker">${r.date || ''} ${ratingBadge(r.rating)}</div>
+        </div>
+        <button class="item-del" onclick="deleteReport('${r.id}')" title="删除该报告">✕</button>
+      </div>`;
+    }).join('');
     return `
-    <div class="report-item ${r.id === currentReportId ? 'active' : ''}">
-      <div class="ri-main" onclick="openReport('${r.id}','${r.ticker}')">
-        <div class="ri-ticker">${label} ${ratingBadge(r.rating)}</div>
-        <div class="ri-meta">${r.date || ''}</div>
+    <div class="report-group">
+      <div class="group-head" onclick="toggleGroup('${key}')">
+        <span class="group-arrow">${arrow}</span>
+        <span class="group-title">${label}</span>
+        <span class="group-meta">${g.count}份 ${latestBadge}</span>
       </div>
-      <button class="item-del" onclick="deleteReport('${r.id}')" title="删除该报告">✕</button>
+      ${isOpen ? `<div class="group-body">${dailyItems}</div>` : ''}
     </div>`;
   }).join('');
+}
+
+function toggleGroup(ticker) {
+  expandedGroups[ticker] = expandedGroups[ticker] === false;
+  loadReports();
 }
 
 // 转义 HTML，防止公司简称/代码注入
@@ -121,11 +147,11 @@ async function clearAllTasks() {
 
 // 打开某 ticker 的最新报告（按 mtime 倒序取第一条）
 async function openLatestReport(ticker) {
-  const data = await api('/api/reports');
-  if (!data || !data.reports) return;
-  const target = data.reports.find(r => r.ticker.toUpperCase() === ticker.toUpperCase());
-  if (target) {
-    openReport(target.id, target.ticker);
+  const data = await api('/api/reports?grouped=1');
+  if (!data || !data.groups) return;
+  const group = data.groups.find(g => g.ticker.toUpperCase() === ticker.toUpperCase());
+  if (group && group.reports.length) {
+    openReport(group.reports[0].id, group.reports[0].ticker);
   } else {
     alert(`未找到 ${ticker} 的历史报告`);
   }
@@ -162,6 +188,7 @@ async function openReport(id, ticker) {
   currentView = 'md';
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('newAnalysis').style.display = 'none';
+  document.getElementById('schedulesPanel').style.display = 'none';
   document.getElementById('reportViewer').style.display = 'flex';
   document.getElementById('viewerTitle').textContent = `${ticker} 分析报告`;
   switchView('md');
@@ -229,6 +256,7 @@ function showNewAnalysis() {
   currentReportId = null;
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('reportViewer').style.display = 'none';
+  document.getElementById('schedulesPanel').style.display = 'none';
   document.getElementById('newAnalysis').style.display = 'flex';
   document.getElementById('progressCard').style.display = 'none';
   // 默认日期为今天
@@ -529,6 +557,87 @@ async function pollTaskStatus() {
       }
     }
   } catch (e) {}
+}
+
+// ===== 定时任务管理 =====
+function openSchedules() {
+  currentReportId = null;
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('reportViewer').style.display = 'none';
+  document.getElementById('newAnalysis').style.display = 'none';
+  document.getElementById('progressCard').style.display = 'none';
+  document.getElementById('schedulesPanel').style.display = 'flex';
+  loadSchedules();
+}
+
+function closeSchedules() {
+  document.getElementById('schedulesPanel').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'flex';
+}
+
+async function loadSchedules() {
+  const data = await api('/api/schedules');
+  if (!data) return;
+  const list = document.getElementById('scheduleList');
+  if (!data.schedules.length) {
+    list.innerHTML = '<div style="color:var(--text-faint);font-size:12px;padding:12px;">暂无定时任务，上方添加标的即可</div>';
+    return;
+  }
+  list.innerHTML = data.schedules.map(s => {
+    const hh = String(s.hour).padStart(2, '0');
+    const mm = String(s.minute).padStart(2, '0');
+    const toggle = s.enabled ? '已启用' : '已停用';
+    return `
+    <div class="schedule-item">
+      <div class="si-main">
+        <div class="si-top">
+          <span class="si-ticker">${escapeHtml(s.ticker)}</span>
+          <span class="si-time">每天 ${hh}:${mm}</span>
+          <span class="task-status ${s.enabled ? 'done' : 'error'}">${toggle}</span>
+        </div>
+        <div class="si-meta">分析师：${escapeHtml(s.analysts)}</div>
+      </div>
+      <div class="si-actions">
+        <button class="btn-ghost" onclick="toggleSchedule('${s.ticker}', ${!s.enabled})">${s.enabled ? '停用' : '启用'}</button>
+        <button class="item-del" onclick="deleteSchedule('${s.ticker}')" title="删除该定时任务">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addSchedule() {
+  const ticker = document.getElementById('inpSchedTicker').value.trim();
+  const hour = parseInt(document.getElementById('inpSchedHour').value, 10);
+  if (!ticker) { alert('请输入股票代码'); return; }
+  const res = await api('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker, hour, minute: 0, enabled: true, analysts: 'market,sentiment,news,fundamentals' })
+  });
+  if (res && res.error) { alert(res.error); return; }
+  document.getElementById('inpSchedTicker').value = '';
+  loadSchedules();
+}
+
+async function deleteSchedule(ticker) {
+  if (!confirm(`确定删除 ${ticker} 的定时任务吗？`)) return;
+  const res = await api(`/api/schedules?ticker=${encodeURIComponent(ticker)}`, { method: 'DELETE' });
+  if (res && res.error) { alert(res.error); return; }
+  loadSchedules();
+}
+
+async function toggleSchedule(ticker, enabled) {
+  // 读取现有配置再回写，保持 hour/minute/analysts 不变
+  const data = await api('/api/schedules');
+  const cur = (data.schedules || []).find(s => s.ticker.toUpperCase() === ticker.toUpperCase());
+  if (!cur) { loadSchedules(); return; }
+  const res = await api('/api/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker, hour: cur.hour, minute: cur.minute, enabled, analysts: cur.analysts })
+  });
+  if (res && res.error) { alert(res.error); return; }
+  loadSchedules();
 }
 
 // 初始化
