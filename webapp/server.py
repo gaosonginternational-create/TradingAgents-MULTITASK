@@ -94,6 +94,78 @@ BUILTIN_COMPANY_NAMES = {
     "300015": "爱尔眼科",
     "688981": "中芯国际",
     "688111": "金山办公",
+    # 补充：半导体/科技热门标的
+    "002371": "北方华创",
+    "002475": "立讯精密",
+    "300308": "中际旭创",
+    "688008": "澜起科技",
+    "688102": "斯瑞新材",
+    "159852": "软件ETF嘉实",
+}
+
+# 港股 / 美股常见标的简称（代码 -> 中文名）
+BUILTIN_GLOBAL_NAMES = {
+    # 港股
+    "0700.HK": "腾讯控股",
+    "9988.HK": "阿里巴巴",
+    "3690.HK": "美团",
+    "9618.HK": "京东集团",
+    "1810.HK": "小米集团",
+    "9999.HK": "网易",
+    "1024.HK": "快手",
+    "1211.HK": "比亚迪股份",
+    "0388.HK": "香港交易所",
+    "2318.HK": "中国平安",
+    "2628.HK": "中国人寿",
+    "3968.HK": "招商银行",
+    "0939.HK": "建设银行",
+    "1398.HK": "工商银行",
+    "3988.HK": "中国银行",
+    "0005.HK": "汇丰控股",
+    "1299.HK": "友邦保险",
+    "2015.HK": "理想汽车",
+    "9868.HK": "小鹏汽车",
+    "9866.HK": "蔚来",
+    "2800.HK": "盈富基金",
+    "2828.HK": "恒生中国企业",
+    "0700.HK": "腾讯控股",
+    # 美股
+    "AAPL": "苹果",
+    "MSFT": "微软",
+    "GOOGL": "谷歌",
+    "GOOG": "谷歌",
+    "AMZN": "亚马逊",
+    "NVDA": "英伟达",
+    "META": "Meta",
+    "TSLA": "特斯拉",
+    "BRK.B": "伯克希尔",
+    "JPM": "摩根大通",
+    "V": "Visa",
+    "JNJ": "强生",
+    "WMT": "沃尔玛",
+    "PG": "宝洁",
+    "MA": "万事达",
+    "HD": "家得宝",
+    "DIS": "迪士尼",
+    "NFLX": "奈飞",
+    "AMD": "超威半导体",
+    "INTC": "英特尔",
+    "BABA": "阿里巴巴",
+    "PDD": "拼多多",
+    "BIDU": "百度",
+    "JD": "京东",
+    "NIO": "蔚来",
+    "LI": "理想汽车",
+    "XPEV": "小鹏汽车",
+    "COIN": "Coinbase",
+    "SMCI": "超微电脑",
+    "LITE": "Lumentum",
+    "SKHY": "SK海力士",
+    "GLW": "康宁",
+    "MRVL": "迈威尔科技",
+    "MU": "美光科技",
+    "SNDK": "闪迪",
+    "SOXX": "费城半导体ETF",
 }
 
 # 分析师 key -> 中文名
@@ -192,11 +264,18 @@ def _learn_company_name_from_report(report_dir: str) -> dict:
 
 
 def get_company_name(ticker: str) -> str:
-    """返回 ticker 的公司简称；A 股/ETF（6位数字）查缓存表，其余返回空串。"""
-    if not re.fullmatch(r"\d{6}", ticker):
+    """返回 ticker 的公司简称。
+
+    A 股/ETF（6位数字）查缓存表；港股/美股查内置常见名称表；其余返回空串。
+    """
+    t = (ticker or "").strip()
+    if not t:
         return ""
-    with COMPANY_NAMES_LOCK:
-        return COMPANY_NAMES.get(ticker, "")
+    if re.fullmatch(r"\d{6}", t):
+        with COMPANY_NAMES_LOCK:
+            return COMPANY_NAMES.get(t, "")
+    # 港股/美股：统一大写匹配内置表（港股代码如 0700.HK，美股如 AAPL）
+    return BUILTIN_GLOBAL_NAMES.get(t.upper(), "")
 
 
 # ---- 任务持久化：服务重启后任务记录不丢失 ----
@@ -725,6 +804,10 @@ class Handler(BaseHTTPRequestHandler):
             with SCHEDULES_LOCK:
                 items = [{"ticker": t, **cfg} for t, cfg in SCHEDULES.items()]
             items.sort(key=lambda x: x["ticker"])
+            # 补充市场分类与标的名称，供前端分组展示
+            for it in items:
+                it["market"] = classify_market(it["ticker"])
+                it["name"] = get_company_name(it["ticker"])
             return self._send_json({"schedules": items})
 
         # API：报告阶段树
