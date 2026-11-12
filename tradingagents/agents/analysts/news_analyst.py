@@ -9,6 +9,7 @@ from tradingagents.agents.tools import (
     get_news,
     get_prediction_markets,
 )
+from tradingagents.dataflows.vendors.local_knowledge import fetch_local_knowledge
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
 TOOLS = (
@@ -66,9 +67,27 @@ def create_news_analyst(llm):
         ticker = state.get("company_of_interest", "")
         macro_guidance = _macro_weighting_guidance(ticker)
 
+        # 本地知识库（IMA 资料落地）——按公司名 + 行业关键词检索，
+        # 命中内容作为专属信息源注入。空则跳过。
+        local_knowledge_block = ""
+        try:
+            local_knowledge_block = fetch_local_knowledge(ticker)
+        except Exception:  # noqa: BLE001 — 检索失败不影响主流程
+            local_knowledge_block = ""
+        local_knowledge_section = ""
+        if local_knowledge_block:
+            local_knowledge_section = (
+                "\n\n## 本地知识库资料（用户自有研报/公众号文章/笔记）\n"
+                "以下是检索到与该标的相关的高价值资料，请优先参考其中关于行业产能、"
+                "价格走势、估值框架和公司基本面的观点，融入你的新闻与宏观分析中。"
+                "注意：这些是观点性资料，需与实时新闻/宏观数据交叉验证。\n\n"
+                f"{local_knowledge_block}\n"
+            )
+
         system_message = (
             f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), get_cn_macro_indicators(indicator, curr_date, look_back_days) for China macro (e.g. 'pmi', 'cpi', 'ppi', 'gdp', 'm2', 'industrial_production', 'retail_sales', 'lpr'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            + local_knowledge_section
             + macro_guidance
             + get_language_instruction()
             + get_past_context_instruction(state)

@@ -223,4 +223,7 @@ __marimo__/
 reports/
 
 # Local run data (reports, cache, memory logs) — don't commit
-data/
+data/*
+!data/knowledge/
+# ...but keep the local knowledge base (IMA-exported research/news/notes)
+!data/knowledge/**

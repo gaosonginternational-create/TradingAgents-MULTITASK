@@ -46,6 +46,7 @@ from tradingagents.dataflows.vendors.akshare.moneyflow import get_ths_moneyflow
 from tradingagents.dataflows.vendors.akshare.orderbook import get_orderbook
 from tradingagents.dataflows.vendors.akshare.national_team import get_national_team_flow
 from tradingagents.dataflows.vendors.akshare.wechat import get_wechat_news
+from tradingagents.dataflows.vendors.local_knowledge import fetch_local_knowledge
 from tradingagents.dataflows.vendors.fingpt import get_fingpt_sentiment
 
 
@@ -152,6 +153,13 @@ def create_sentiment_analyst(llm):
             fingpt_sentiment_block = get_fingpt_sentiment(headlines)
         except Exception:
             fingpt_sentiment_block = ""
+        # 本地知识库（IMA 资料落地）——用户自有的研报/公众号文章/笔记，
+        # 按公司名 + 行业关键词检索，命中内容作为专属信息源注入。
+        local_knowledge_block = ""
+        try:
+            local_knowledge_block = fetch_local_knowledge(ticker)
+        except Exception:
+            local_knowledge_block = ""
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -169,6 +177,7 @@ def create_sentiment_analyst(llm):
             national_team_block=national_team_block,
             cn_wechat_block=cn_wechat_block,
             fingpt_sentiment_block=fingpt_sentiment_block,
+            local_knowledge_block=local_knowledge_block,
         ) + get_past_context_instruction(state)
 
         prompt = ChatPromptTemplate.from_messages(
@@ -230,6 +239,7 @@ def _build_system_message(
     national_team_block: str = "",
     cn_wechat_block: str = "",
     fingpt_sentiment_block: str = "",
+    local_knowledge_block: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
     if subreddits == DEFAULT_SUBREDDITS:
@@ -315,6 +325,21 @@ headlines the US social vendors miss.
 <start_of_fingpt_sentiment>
 {fingpt_sentiment_block}
 <end_of_fingpt_sentiment>
+
+### 本地知识库（IMA 资料）——用户自有的研报 / 公众号文章 / 笔记
+The user's own curated research material (industry reports, analyst notes, and
+WeChat articles on this company's sector) retrieved from the local knowledge
+base by company-name + industry-keyword match. This is *deep, sector-specific
+context* the generic feeds (news/social) don't carry — it may contain capacity
+roadmaps, price forecasts, valuation frameworks, or a specific analyst's thesis.
+Treat it as a high-signal but *opinionated* source: use it to enrich your
+industry understanding and narrative framing, but cross-check its numbers and
+thesis against the live data blocks above. If this block is empty, there is
+simply no matching material for this ticker — that is expected, not a data gap.
+
+<start_of_local_knowledge>
+{local_knowledge_block}
+<end_of_local_knowledge>
 
 ### SentiSense — model-scored retail sentiment (Reddit / X / YouTube / Substack / news)
 A signed sentiment polarity (-1.0 bearish to +1.0 bullish), a mention-volume count, and a proprietary bull/bear score, all scored by financial-text models rather than user labels. This is a cleaner, model-weighted retail sentiment signal.
