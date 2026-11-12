@@ -10,6 +10,7 @@ TradingAgents 本地工作台后端服务
 """
 import json
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -24,6 +25,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 TASKS_FILE = os.path.join(BASE_DIR, "data", "logs", "tasks.json")
 COMPANY_NAMES_FILE = os.path.join(BASE_DIR, "data", "logs", "company_names.json")
 SCHEDULES_FILE = os.path.join(BASE_DIR, "data", "logs", "schedules.json")
+LAST_TRIGGER_FILE = os.path.join(BASE_DIR, "data", "logs", "last_trigger.json")
 PORT = 8765
 
 # 定时任务默认触发时间（每天 23:00 后开始；实际是"当天 23:00 起、下次运行前"这个窗口内触发一次）
@@ -406,8 +408,32 @@ def _write_schedules(data):
 
 SCHEDULES = _load_schedules()
 
-# 记录每个 ticker 上一次触发调度的日期（YYYY-MM-DD），防止同一天重复触发
-_last_schedule_trigger = {}
+# 记录每个 ticker 上一次触发调度的日期（YYYY-MM-DD），防止同一天重复触发。
+# 持久化到磁盘，避免服务重启后（内存清空）当晚又重复触发一批已处理过的标的。
+def _load_last_trigger():
+    if os.path.exists(LAST_TRIGGER_FILE):
+        try:
+            with open(LAST_TRIGGER_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _save_last_trigger():
+    try:
+        os.makedirs(os.path.dirname(LAST_TRIGGER_FILE), exist_ok=True)
+        tmp = LAST_TRIGGER_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_last_schedule_trigger, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, LAST_TRIGGER_FILE)
+    except Exception:
+        pass
+
+
+_last_schedule_trigger = _load_last_trigger()
 
 
 def _ticker_analyzed_today(ticker: str) -> bool:
@@ -470,8 +496,13 @@ def _should_trigger(ticker: str, cfg: dict) -> bool:
     return False
 
 
-def _trigger_scheduled_analysis(ticker: str, cfg: dict):
-    """触发一次定时分析，复用 /api/analyze 的底层 run_analysis。"""
+# 定时任务串行执行队列：到点的标的先入队，由单一工作线程逐个跑，
+# 避免 23 个标的在同一秒并发启动 23 个 Docker 容器导致资源打满、全部失败。
+_schedule_queue = queue.Queue()
+
+
+def _enqueue_scheduled_analysis(ticker: str, cfg: dict):
+    """把到点的定时任务入队（只入队，不直接启动分析）。"""
     analysts = cfg.get("analysts", "market,sentiment,news,fundamentals")
     date = datetime.now().strftime("%Y-%m-%d")
     task_id = make_task_id()
@@ -480,8 +511,8 @@ def _trigger_scheduled_analysis(ticker: str, cfg: dict):
             "ticker": ticker,
             "date": date,
             "analysts": analysts,
-            "status": "starting",
-            "log_lines": [f"[定时任务] 自动触发 {ticker} 分析（{date}）"],
+            "status": "queued",
+            "log_lines": [f"[定时任务] 已加入队列：{ticker}（{date}），等待执行"],
             "exit_code": None,
             "created_at": time.time(),
             "finished_at": None,
@@ -489,19 +520,45 @@ def _trigger_scheduled_analysis(ticker: str, cfg: dict):
         }
     _save_tasks_history()
     _last_schedule_trigger[ticker] = date
-    t = threading.Thread(target=run_analysis, args=(ticker, date, analysts, task_id), daemon=True)
-    t.start()
+    _save_last_trigger()
+    _schedule_queue.put((ticker, date, analysts, task_id))
+
+
+def _schedule_worker():
+    """调度工作线程：串行消费队列，一个标的跑完再跑下一个。"""
+    while True:
+        try:
+            ticker, date, analysts, task_id = _schedule_queue.get()
+            try:
+                with TASKS_LOCK:
+                    task = RUNNING_TASKS.get(task_id)
+                    if task:
+                        task["status"] = "running"
+                        task["log_lines"].append(f"[定时任务] 开始执行 {ticker} 分析")
+                run_analysis(ticker, date, analysts, task_id)
+            except Exception as e:
+                with TASKS_LOCK:
+                    task = RUNNING_TASKS.get(task_id)
+                    if task:
+                        task["status"] = "error"
+                        task["exit_code"] = -1
+                        task["log_lines"].append(f"[定时任务] 执行异常: {e}")
+                _save_tasks_history()
+            finally:
+                _schedule_queue.task_done()
+        except Exception:
+            pass
 
 
 def _scheduler_loop():
-    """后台调度线程：每分钟检查一次，触发到点的定时任务。"""
+    """后台调度线程：每分钟检查一次，把到点的定时任务入队（由工作线程串行执行）。"""
     while True:
         try:
             with SCHEDULES_LOCK:
                 items = list(SCHEDULES.items())
             for ticker, cfg in items:
                 if _should_trigger(ticker, cfg):
-                    _trigger_scheduled_analysis(ticker, cfg)
+                    _enqueue_scheduled_analysis(ticker, cfg)
         except Exception:
             pass
         time.sleep(60)  # 每分钟检查一次
@@ -1085,12 +1142,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(STATIC_DIR, exist_ok=True)
-    # 启动定时任务调度线程
+    # 启动定时任务调度线程 + 串行执行工作线程
     scheduler = threading.Thread(target=_scheduler_loop, daemon=True)
     scheduler.start()
+    worker = threading.Thread(target=_schedule_worker, daemon=True)
+    worker.start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"TradingAgents 工作台已启动: http://127.0.0.1:{PORT}")
-    print(f"定时任务调度器已启动（每天 {SCHEDULE_HOUR}:{SCHEDULE_MINUTE:02d} 后触发到点任务）")
+    print(f"定时任务调度器已启动（每天 {SCHEDULE_HOUR}:{SCHEDULE_MINUTE:02d} 后触发到点任务，串行执行）")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
