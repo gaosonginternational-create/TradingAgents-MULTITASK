@@ -624,26 +624,48 @@ async function loadSchedules() {
     list.innerHTML = '<div style="color:var(--text-faint);font-size:12px;padding:12px;">暂无定时任务，上方添加标的即可</div>';
     return;
   }
-  list.innerHTML = data.schedules.map(s => {
-    const hh = String(s.hour).padStart(2, '0');
-    const mm = String(s.minute).padStart(2, '0');
-    const toggle = s.enabled ? '已启用' : '已停用';
-    return `
-    <div class="schedule-item">
-      <div class="si-main">
-        <div class="si-top">
-          <span class="si-ticker">${escapeHtml(s.ticker)}</span>
-          <span class="si-time">每天 ${hh}:${mm}</span>
-          <span class="task-status ${s.enabled ? 'done' : 'error'}">${toggle}</span>
+
+  // 按市场聚合成大类
+  const byMarket = {};
+  for (const s of data.schedules) {
+    const m = s.market || '其它';
+    if (!byMarket[m]) byMarket[m] = [];
+    byMarket[m].push(s);
+  }
+
+  // 复用侧边栏的市场顺序与图标
+  const html = MARKET_ORDER.filter(m => byMarket[m]).map(m => {
+    const items = byMarket[m];
+    const icon = MARKET_ICON[m] || '🌐';
+    const itemsHtml = items.map(s => {
+      const hh = String(s.hour).padStart(2, '0');
+      const mm = String(s.minute).padStart(2, '0');
+      const toggle = s.enabled ? '已启用' : '已停用';
+      const nameLabel = s.name ? `<span class="si-name">${escapeHtml(s.name)}</span>` : '';
+      return `
+      <div class="schedule-item">
+        <div class="si-main">
+          <div class="si-top">
+            <span class="si-ticker">${escapeHtml(s.ticker)} ${nameLabel}</span>
+            <span class="si-time">每天 ${hh}:${mm}</span>
+            <span class="task-status ${s.enabled ? 'done' : 'error'}">${toggle}</span>
+          </div>
+          <div class="si-meta">分析师：${escapeHtml(s.analysts)}</div>
         </div>
-        <div class="si-meta">分析师：${escapeHtml(s.analysts)}</div>
-      </div>
-      <div class="si-actions">
-        <button class="btn-ghost" onclick="toggleSchedule('${s.ticker}', ${!s.enabled})">${s.enabled ? '停用' : '启用'}</button>
-        <button class="item-del" onclick="deleteSchedule('${s.ticker}')" title="删除该定时任务">✕</button>
-      </div>
+        <div class="si-actions">
+          <button class="btn-ghost" onclick="toggleSchedule('${s.ticker}', ${!s.enabled})">${s.enabled ? '停用' : '启用'}</button>
+          <button class="item-del" onclick="deleteSchedule('${s.ticker}')" title="删除该定时任务">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+    <div class="schedule-market">
+      <div class="schedule-market-head">${icon} ${m} <span class="schedule-market-meta">${items.length} 个</span></div>
+      ${itemsHtml}
     </div>`;
   }).join('');
+
+  list.innerHTML = html;
 }
 
 async function addSchedule() {
