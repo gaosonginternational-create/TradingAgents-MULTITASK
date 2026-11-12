@@ -153,7 +153,14 @@ def _learn_company_name_from_report(report_dir: str) -> dict:
 
     报告正文里分析师常写「600519（贵州茅台）」或「贵州茅台（600519）」，
     从市场/基本面分析师报告的前若干行提取，命中则缓存。
+
+    为避免把标题（如「公司新闻与事件梳理（603259）」）误判为公司名，
+    只信任以下两类「高置信」写法：
+      1. 行首标题「# 603259（药明康德…）」——代码在行首、紧跟括号的公司名；
+      2. 「药明康德（603259）」——纯中文（2~6 字，不含标题惯用词）后紧跟括号代码。
     """
+    # 标题惯用词：命中这些词说明括号前是章节标题而非公司名
+    _SECTION_WORDS = ("梳理", "分析", "研究", "报告", "新闻", "事件", "观点", "综述", "总结", "概览")
     learned = {}
     for folder in ("1_analysts",):
         base = os.path.join(report_dir, folder)
@@ -168,14 +175,18 @@ def _learn_company_name_from_report(report_dir: str) -> dict:
                     text = f.read(4000)
             except Exception:
                 continue
-            # 匹配「6位代码（中文简称）」或「中文简称（6位代码）」
-            for m in re.finditer(r"(\d{6})\s*[（(]\s*([\u4e00-\u9fa5A-Za-z0-9]{2,12})\s*[)）]", text):
+
+            # 规则1：标题行「# 603259（药明康德 / WuXi AppTec）…」——取括号内第一个中文/字母段
+            # 允许括号内含「药明康德 / WuXi AppTec」这类带空格斜杠的写法，截取首个片段
+            for m in re.finditer(r"^#+\s*(\d{6})\s*[（(]\s*([\u4e00-\u9fa5A-Za-z]{2,12})", text, flags=re.MULTILINE):
                 code, name = m.group(1), m.group(2).strip()
-                if name and not re.fullmatch(r"\d+", name):
+                if name and not re.fullmatch(r"[A-Za-z]+", name):  # 排除纯英文（不是中文简称）
                     learned[code] = name
-            for m in re.finditer(r"([\u4e00-\u9fa5]{2,8})\s*[（(]\s*(\d{6})\s*[)）]", text):
+
+            # 规则2：「药明康德（603259）」——纯中文 2~6 字，且不含标题惯用词
+            for m in re.finditer(r"([\u4e00-\u9fa5]{2,6})\s*[（(]\s*(\d{6})\s*[)）]", text):
                 name, code = m.group(1).strip(), m.group(2)
-                if name:
+                if name and not any(w in name for w in _SECTION_WORDS):
                     learned[code] = name
     return learned
 
@@ -426,10 +437,30 @@ def list_reports():
     return items
 
 
+def classify_market(ticker: str) -> str:
+    """根据 ticker 判断市场类别，返回：A股 / ETF / 港股 / 美股 / 其它。"""
+    t = (ticker or "").upper()
+    # 港股：形如 0700.HK / 9988.HK
+    if re.fullmatch(r"\d{1,5}\.HK", t):
+        return "港股"
+    # 6 位纯数字：先判 ETF，再判 A股
+    if re.fullmatch(r"\d{6}", t):
+        p2 = t[:2]
+        etf_sh = {"51", "52", "53", "56", "58", "59"}
+        etf_sz = {"15", "16", "18"}
+        if p2 in etf_sh or p2 in etf_sz:
+            return "ETF"
+        return "A股"
+    # 美股：英文字母代码（含 .US / .O 等后缀）
+    if re.fullmatch(r"[A-Z]{1,5}(\.[A-Z]{1,3})?", t):
+        return "美股"
+    return "其它"
+
+
 def list_report_groups():
     """把历史报告按标的（ticker）聚合为文件夹结构。
 
-    返回 [{ticker, name, count, latest_rating, reports: [平铺 item...]}]
+    返回 [{ticker, name, market, count, latest_rating, reports: [平铺 item...]}]
     reports 内部仍沿用 list_reports 的 item 结构，前端可复用渲染逻辑。
     """
     flat = list_reports()
@@ -441,6 +472,7 @@ def list_report_groups():
             g = {
                 "ticker": item["ticker"],
                 "name": item["name"],
+                "market": classify_market(item["ticker"]),
                 "count": 0,
                 "latest_rating": item["rating"],
                 "reports": [],

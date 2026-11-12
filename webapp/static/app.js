@@ -27,8 +27,13 @@ async function api(path, opts) {
   return res.json();
 }
 
-// ===== 报告列表（按标的分组为文件夹树） =====
-let expandedGroups = {};  // ticker -> true/false，记住展开状态
+// ===== 报告列表（市场 → 标的 → 报告 三层文件夹树） =====
+let expandedGroups = {};    // ticker -> true/false，记住标的展开状态
+let expandedMarkets = {};   // market -> true/false，记住市场大类展开状态
+
+// 市场大类的展示顺序与图标
+const MARKET_ORDER = ['A股', 'ETF', '港股', '美股', '其它'];
+const MARKET_ICON = { 'A股': '🇨🇳', 'ETF': '📈', '港股': '🇭🇰', '美股': '🇺🇸', '其它': '🌐' };
 
 async function loadReports() {
   const data = await api('/api/reports?grouped=1');
@@ -42,32 +47,68 @@ async function loadReports() {
     return;
   }
   if (countEl) countEl.textContent = groups.length + ' 个标的';
-  list.innerHTML = groups.map(g => {
-    const key = g.ticker.toUpperCase();
-    const isOpen = expandedGroups[key] !== false; // 默认展开
-    const label = g.name ? `${g.ticker} <span class="ri-name">${escapeHtml(g.name)}</span>` : g.ticker;
-    const arrow = isOpen ? '▾' : '▸';
-    const latestBadge = ratingBadge(g.latest_rating);
-    const dailyItems = g.reports.map(r => {
-      const active = r.id === currentReportId ? 'active' : '';
-      return `
-      <div class="report-item sub ${active}">
-        <div class="ri-main" onclick="openReport('${r.id}','${r.ticker}')">
-          <div class="ri-ticker">${r.date || ''} ${ratingBadge(r.rating)}</div>
-        </div>
-        <button class="item-del" onclick="deleteReport('${r.id}')" title="删除该报告">✕</button>
-      </div>`;
-    }).join('');
+
+  // 按市场聚合成大类
+  const byMarket = {};
+  for (const g of groups) {
+    const m = g.market || '其它';
+    if (!byMarket[m]) byMarket[m] = [];
+    byMarket[m].push(g);
+  }
+
+  // 按固定顺序渲染市场大类（未出现的市场跳过）
+  const html = MARKET_ORDER.filter(m => byMarket[m]).map(m => {
+    const mGroups = byMarket[m];
+    const mIsOpen = expandedMarkets[m] !== false; // 默认展开
+    const mArrow = mIsOpen ? '▾' : '▸';
+    const totalReports = mGroups.reduce((s, g) => s + g.count, 0);
+    const icon = MARKET_ICON[m] || '🌐';
+    const groupsHtml = mGroups.map(g => renderGroup(g)).join('');
     return `
-    <div class="report-group">
-      <div class="group-head" onclick="toggleGroup('${key}')">
-        <span class="group-arrow">${arrow}</span>
-        <span class="group-title">${label}</span>
-        <span class="group-meta">${g.count}份 ${latestBadge}</span>
+    <div class="market-section">
+      <div class="market-head" onclick="toggleMarket('${m}')">
+        <span class="market-arrow">${mArrow}</span>
+        <span class="market-title">${icon} ${m}</span>
+        <span class="market-meta">${mGroups.length} 标的 · ${totalReports} 份</span>
       </div>
-      ${isOpen ? `<div class="group-body">${dailyItems}</div>` : ''}
+      ${mIsOpen ? `<div class="market-body">${groupsHtml}</div>` : ''}
     </div>`;
   }).join('');
+
+  list.innerHTML = html;
+}
+
+// 渲染单个标的文件夹（挂在某个市场大类下）
+function renderGroup(g) {
+  const key = g.ticker.toUpperCase();
+  const isOpen = expandedGroups[key] !== false; // 默认展开
+  const label = g.name ? `${g.ticker} <span class="ri-name">${escapeHtml(g.name)}</span>` : g.ticker;
+  const arrow = isOpen ? '▾' : '▸';
+  const latestBadge = ratingBadge(g.latest_rating);
+  const dailyItems = g.reports.map(r => {
+    const active = r.id === currentReportId ? 'active' : '';
+    return `
+    <div class="report-item sub ${active}">
+      <div class="ri-main" onclick="openReport('${r.id}','${r.ticker}')">
+        <div class="ri-ticker">${r.date || ''} ${ratingBadge(r.rating)}</div>
+      </div>
+      <button class="item-del" onclick="deleteReport('${r.id}')" title="删除该报告">✕</button>
+    </div>`;
+  }).join('');
+  return `
+  <div class="report-group">
+    <div class="group-head" onclick="toggleGroup('${key}')">
+      <span class="group-arrow">${arrow}</span>
+      <span class="group-title">${label}</span>
+      <span class="group-meta">${g.count}份 ${latestBadge}</span>
+    </div>
+    ${isOpen ? `<div class="group-body">${dailyItems}</div>` : ''}
+  </div>`;
+}
+
+function toggleMarket(market) {
+  expandedMarkets[market] = expandedMarkets[market] === false;
+  loadReports();
 }
 
 function toggleGroup(ticker) {
@@ -643,3 +684,49 @@ async function toggleSchedule(ticker, enabled) {
 // 初始化
 loadReports();
 loadTasks();
+
+// ===== 侧边栏拖拽调整宽度 =====
+(function initSidebarResizer() {
+  const sidebar = document.querySelector('.sidebar');
+  const resizer = document.getElementById('sidebarResizer');
+  if (!sidebar || !resizer) return;
+
+  // 从 localStorage 恢复上次宽度
+  const saved = localStorage.getItem('sidebarWidth');
+  if (saved) {
+    const w = parseInt(saved, 10);
+    if (w >= 220 && w <= 640) sidebar.style.width = w + 'px';
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let startW = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    let w = startW + (e.clientX - startX);
+    // 限制在最小/最大宽度之间
+    w = Math.max(220, Math.min(640, w));
+    sidebar.style.width = w + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    // 保存宽度
+    localStorage.setItem('sidebarWidth', sidebar.getBoundingClientRect().width);
+  });
+})();

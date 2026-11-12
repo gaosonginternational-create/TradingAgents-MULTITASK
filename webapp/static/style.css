@@ -31,14 +31,32 @@ body {
 
 /* ===== 侧边栏 ===== */
 .sidebar {
-  width: 280px;
-  min-width: 280px;
+  width: 300px;
+  min-width: 220px;
+  max-width: 640px;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 20px 16px;
   gap: 18px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* 侧边栏拖拽手柄 */
+.sidebar-resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background .15s;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: var(--accent);
 }
 
 .logo { display: flex; align-items: center; gap: 10px; }
@@ -268,6 +286,17 @@ body {
 
 /* ===== 报告文件夹树 ===== */
 .side-count { font-size: 10px; color: var(--text-faint); letter-spacing: 0; text-transform: none; }
+.market-section { display: flex; flex-direction: column; margin-bottom: 4px; }
+.market-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  transition: background .15s; user-select: none;
+}
+.market-head:hover { background: var(--card); }
+.market-arrow { font-size: 10px; color: var(--text-faint); width: 12px; text-align: center; flex-shrink: 0; }
+.market-title { font-weight: 700; font-size: 13px; flex: 1; min-width: 0; color: var(--text); }
+.market-meta { font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
+.market-body { display: flex; flex-direction: column; gap: 2px; padding-left: 14px; }
 .report-group { display: flex; flex-direction: column; }
 .group-head {
   display: flex; align-items: center; gap: 6px;
