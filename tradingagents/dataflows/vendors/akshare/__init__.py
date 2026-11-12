@@ -24,6 +24,10 @@ from tradingagents.dataflows.vendors.akshare.announcements import (
     get_announcements,
     get_earnings_guidance,
 )
+from tradingagents.dataflows.vendors.akshare.research import (
+    get_downstream_analysis,
+    get_research_reports,
+)
 
 __all__ = [
     "get_stock",
@@ -37,4 +41,6 @@ __all__ = [
     "get_cashflow",
     "get_announcements",
     "get_earnings_guidance",
+    "get_research_reports",
+    "get_downstream_analysis",
 ]

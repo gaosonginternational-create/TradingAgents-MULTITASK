@@ -10,11 +10,13 @@ from tradingagents.dataflows.vendors.akshare import (
     get_announcements as get_akshare_announcements,
     get_balance_sheet as get_akshare_balance_sheet,
     get_cashflow as get_akshare_cashflow,
+    get_downstream_analysis as get_akshare_downstream_analysis,
     get_earnings_guidance as get_akshare_earnings_guidance,
     get_fundamentals as get_akshare_fundamentals,
     get_global_news as get_akshare_global_news,
     get_income_statement as get_akshare_income_statement,
     get_news as get_akshare_news,
+    get_research_reports as get_akshare_research_reports,
     get_stock as get_akshare_stock,
     get_valuation as get_akshare_valuation,
 )
@@ -78,7 +80,8 @@ TOOLS_CATEGORIES = {
             "get_cashflow",
             "get_income_statement",
             "get_announcements",
-            "get_earnings_guidance"
+            "get_research_reports",
+            "get_downstream_analysis"
         ]
     },
     "news_data": {
@@ -156,6 +159,12 @@ VENDOR_METHODS = {
     },
     "get_earnings_guidance": {
         "akshare": get_akshare_earnings_guidance,
+    },
+    "get_research_reports": {
+        "akshare": get_akshare_research_reports,
+    },
+    "get_downstream_analysis": {
+        "akshare": get_akshare_downstream_analysis,
     },
     # news_data
     "get_news": {

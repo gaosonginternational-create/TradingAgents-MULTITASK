@@ -394,3 +394,42 @@ def get_earnings_guidance(
         str: A formatted markdown report of earnings guidance / express results
     """
     return route_to_vendor("get_earnings_guidance", ticker, as_of(curr_date, trade_date))
+
+
+@tool
+def get_research_reports(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve sell-side research reports and multi-year earnings forecasts for an
+    A-share instrument. Returns each brokerage's rating, report title (which
+    often names the demand/order/capex driver), and the 2026/2027/2028 EPS +
+    PE forecast, with demand signals flagged. Use this to read what analysts
+    project for the company's future earnings and the driver behind it.
+
+    Returns:
+        str: A formatted markdown block of research reports and EPS forecasts
+    """
+    return route_to_vendor("get_research_reports", ticker, trade_date or None)
+
+
+@tool
+def get_downstream_analysis(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve a downstream-customer demand triangulation for an A-share
+    instrument. Resolves the company's downstream customers (e.g. semiconductor
+    equipment -> wafer fabs; optical modules -> cloud/AI hyperscalers; memory
+    interface chips -> DRAM makers) and aggregates their research reports and
+    profit forecasts, so you can project the company's orders and revenue from
+    the demand side (customer capex, build plans, guidance) rather than only
+    its trailing numbers. Use this to estimate future revenue/earnings from
+    downstream demand and compare against the current valuation.
+
+    Returns:
+        str: A formatted markdown block of downstream-customer demand signals
+    """
+    return route_to_vendor("get_downstream_analysis", ticker, trade_date or None)

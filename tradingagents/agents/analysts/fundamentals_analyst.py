@@ -14,7 +14,8 @@ from tradingagents.agents.tools import (
     get_insider_transactions,
     get_valuation,
     get_announcements,
-    get_earnings_guidance,
+    get_research_reports,
+    get_downstream_analysis,
 )
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
@@ -26,7 +27,8 @@ TOOLS = (
     get_income_statement,
     get_insider_transactions,
     get_announcements,
-    get_earnings_guidance,
+    get_research_reports,
+    get_downstream_analysis,
 )
 
 
@@ -38,8 +40,8 @@ def create_fundamentals_analyst(llm):
         system_message = (
             "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
-            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_valuation` for forward multiples (forward PE/PB, PEG, EV/EBITDA), historical valuation trend, DCF/FCFF estimate and the industry-appropriate valuation model, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements, `get_insider_transactions` for recent insider buying and selling, `get_announcements` for company disclosures (业绩预告/快报、重大合同、中标、扩产产能、定增回购、增减持、股权激励、分红、并购重组、订单/供货/客户), and `get_earnings_guidance` for the company's own forward earnings guidance (业绩预告预测净利润区间、变动幅度与原因、业绩快报)."
-            + " For A-share (Chinese) instruments, leverage the disclosure rhythm to project future earnings and compare against today's valuation: (a) use `get_earnings_guidance` to read the company's own 业绩预告/业绩快报 — the predicted net-profit range, YoY change and the stated reason — as the primary forward earnings anchor; (b) use `get_announcements` to find capacity expansion, major contracts/wins, order/customer news and capex signals that point to future revenue; (c) where a downstream customer's financials and capital expenditure are available (e.g. the company supplies a large customer whose guidance/capex you can infer), use the customer's spend trajectory to *triangulate* the company's future revenue rather than extrapolating only the company's own trailing numbers; (d) convert the resulting forward net-profit estimate into a forward P/E (or the industry-appropriate multiple) and compare it to the current price to judge whether today's value already prices in the guidance — be explicit about whether a gap is a cheap stock or an already-reflected expectation."
+            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_valuation` for forward multiples (forward PE/PB, PEG, EV/EBITDA), historical valuation trend, DCF/FCFF estimate and the industry-appropriate valuation model, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements, `get_insider_transactions` for recent insider buying and selling, `get_announcements` for company disclosures (重大合同、中标、扩产产能、定增回购、增减持、股权激励、分红、并购重组、订单/供货/客户), `get_research_reports` for sell-side research and multi-year EPS forecasts, and `get_downstream_analysis` for downstream-customer demand triangulation."
+            + " For A-share (Chinese) instruments, estimate future earnings and value from the *demand side*, not only the company's trailing numbers: (a) use `get_research_reports` to read sell-side forecasts — the report titles name the demand/order/capex driver (订单能见度、供需、AI资本开支、扩产、提价), and the 2026/2027/2028 EPS + PE estimates give a structured forward-earnings anchor; (b) use `get_downstream_analysis` to resolve the company's downstream customers (equipment makers -> wafer fabs; optical modules -> cloud/AI hyperscalers; memory-interface chips -> DRAM makers) and pull *their* research and profit forecasts, then triangulate the company's orders/revenue from the customers' capex, build plans, and guidance; (c) use `get_announcements` for capacity-expansion, major-contract and order/customer disclosures that confirm the demand signal; (d) combine the demand-side revenue estimate with the company's margin/cost structure (from the statements) to derive forward net profit, convert it into the industry-appropriate multiple (PEG/PS/forward-PE/EV-EBITDA), and compare against the current valuation to judge whether the market already prices in the demand. Be explicit about the driver variable (customer capex, shipments, unit value), the assumed share, and the resulting forward earnings."
             + " When analyzing valuation: (1) choose the valuation model appropriate to the industry — e.g. banks/insurance use PB + ROE (or PEV) rather than PE; high-growth tech/semi uses PEG + PS + forward PE; mature cash-flow-stable consumer uses DCF; asset-heavy industrials use EV/EBITDA — and explain why. (2) Analyze the *trend* of valuation over time and where the current multiple sits in its historical range (percentile), not just the point value. (3) Analyze how the price has moved around its valuation (e.g. earnings-driven vs multiple-expansion-driven moves), and whether a change in price reflects a change in fundamentals or merely a change in the multiple. (4) Distinguish trailing vs forward multiples — forward PE reflects expected future earnings, and a falling forward PE can signal either expected growth or a cheapening stock; be explicit about which. (5) For an ETF, analyze the fundamentals of its main constituent holdings, not the fund wrapper."
             + get_language_instruction()
             + get_past_context_instruction(state)
