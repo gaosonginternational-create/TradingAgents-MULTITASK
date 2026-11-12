@@ -45,6 +45,7 @@ from tradingagents.dataflows.vendors.akshare.sentiment import get_cn_sentiment
 from tradingagents.dataflows.vendors.akshare.moneyflow import get_ths_moneyflow
 from tradingagents.dataflows.vendors.akshare.orderbook import get_orderbook
 from tradingagents.dataflows.vendors.akshare.national_team import get_national_team_flow
+from tradingagents.dataflows.vendors.akshare.wechat import get_wechat_news
 from tradingagents.dataflows.vendors.fingpt import get_fingpt_sentiment
 
 
@@ -118,6 +119,7 @@ def create_sentiment_analyst(llm):
         cn_moneyflow_block = ""
         cn_orderbook_block = ""
         national_team_block = ""
+        cn_wechat_block = ""
         if cn_market:
             try:
                 cn_sentiment_block = get_cn_sentiment(ticker)
@@ -136,6 +138,11 @@ def create_sentiment_analyst(llm):
                 national_team_block = get_national_team_flow(end_date)
             except Exception:
                 national_team_block = ""
+            # 微信公众号观点（搜狗微信搜索）——专业媒体/大V 的舆情补充
+            try:
+                cn_wechat_block = get_wechat_news(ticker)
+            except Exception:
+                cn_wechat_block = ""
         # FinGPT local-inference sentiment scoring of the news headlines — an
         # independent, model-based read that works for both US and domestic
         # news. Degrades to a placeholder if the local service is down.
@@ -160,6 +167,7 @@ def create_sentiment_analyst(llm):
             cn_moneyflow_block=cn_moneyflow_block,
             cn_orderbook_block=cn_orderbook_block,
             national_team_block=national_team_block,
+            cn_wechat_block=cn_wechat_block,
             fingpt_sentiment_block=fingpt_sentiment_block,
         )
 
@@ -220,6 +228,7 @@ def _build_system_message(
     cn_moneyflow_block: str = "",
     cn_orderbook_block: str = "",
     national_team_block: str = "",
+    cn_wechat_block: str = "",
     fingpt_sentiment_block: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
@@ -261,6 +270,13 @@ The "national team" (中央汇金/证金/社保) funnels support through broad-i
 {national_team_block}
 <end_of_national_team>
 
+### 微信公众号观点 — 搜狗微信搜索（专业媒体 / 大V 舆情）
+WeChat Official Account articles surfaced by keyword search (Sogou WeChat search). Each item is a *headline + short summary* from financial/media accounts — a professional-opinion and narrative read that the retail feeds (千股千评) and news feeds (Eastmoney/Caixin) don't carry. It reflects how the media/大V are *framing* the stock, not raw retail sentiment. Note the search returns a small, recent sample (not exhaustive), and only headline+summary (full text is not retrievable). If the block is `<unavailable>`, the search was blocked/empty — treat it as an optional signal, not a data gap.
+
+<start_of_cn_wechat>
+{cn_wechat_block}
+<end_of_cn_wechat>
+
 ## How to analyze this domestic data
 
 1. **Read 综合得分 as the primary directional signal.** A score ≥ 80 is clearly positive, 50–80 neutral-to-positive, < 50 negative. 关注指数 ≥ 80 means heavy retail attention (which can signal either genuine interest or crowded/contrarian risk — flag which). 人气排名 in the top 10 is very hot; outside the top 100 is cool.
@@ -271,8 +287,9 @@ The "national team" (中央汇金/证金/社保) funnels support through broad-i
 6. **Read 委比 as the short-term intraday lean.** 委比 > +0.2 means the order book is bid-heavy (near-term support), < -0.2 ask-heavy (near-term pressure). Cross-check it against 资金净额: a bid-heavy book with 主力净流出 can mean the big orders are selling into retail bids.
 7. **Read the 国家队 ETF 动向 as the market-level background.** If broad-index ETFs show sustained 10日/20日 净流入 (especially 沪深300/上证50/科创50), that is structural support — a tailwind for the broader market and for liquid large-caps. Sustained 净流出 is a headwind. This is context, not a per-ticker call.
 8. **The US social sources (SentiSense/StockTwits/Reddit) do not cover this domestic ticker** — treat their placeholders as expected absences, not data gaps, and lean on this domestic block plus news.
+9. **Read the 微信公众号 block as the narrative/media-framing signal.** The account headlines show how professional media and 大V are framing the stock right now (e.g. "业绩超预期", "估值承压", "政策利好"). It is *opinion/narrative*, distinct from 千股千评 (retail mood) and 资金流 (money). Flag a divergence: 媒体一致看多但主力资金净流出 = 情绪/叙事与资金背离，警惕追高；媒体看空但资金流入 = 可能错杀。Use it to gauge *what story the market is telling*, not as a buy/sell signal by itself.
 """
-        cn_rules = "3. **For domestic tickers, weight the 东方财富 block (综合得分/关注指数), the 同花顺资金流 block (净额/净流入占比), and the 盘口委比 as the primary signals** — and above all flag the sentiment-vs-moneyflow divergence. Use the 国家队宽基ETF动向 as market-level context. The US sources will be unavailable placeholders; that is expected."
+        cn_rules = "3. **For domestic tickers, weight the 东方财富 block (综合得分/关注指数), the 同花顺资金流 block (净额/净流入占比), and the 盘口委比 as the primary signals** — and above all flag the sentiment-vs-moneyflow divergence. Use the 微信公众号 block as the media-narrative read, and the 国家队宽基ETF动向 as market-level context. The US sources will be unavailable placeholders; that is expected."
     else:
         cn_block = ""
         cn_rules = "3. **Look for cross-source divergences.** If SentiSense is bearish but StockTwits is overwhelmingly bullish (or news framing disagrees), that mismatch is itself a signal — model-weighted vs user-labelled reads can diverge when retail is chasing a thesis the models discount."
