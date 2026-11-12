@@ -1,7 +1,11 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import (
+    get_instrument_context_from_state,
+    get_language_instruction,
+    get_past_context_instruction,
+)
 from tradingagents.agents.tools import (
     get_balance_sheet,
     get_cashflow,
@@ -33,6 +37,7 @@ def create_fundamentals_analyst(llm):
             + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_valuation` for forward multiples (forward PE/PB, PEG, EV/EBITDA), historical valuation trend, DCF/FCFF estimate and the industry-appropriate valuation model, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements, and `get_insider_transactions` for recent insider buying and selling."
             + " When analyzing valuation: (1) choose the valuation model appropriate to the industry — e.g. banks/insurance use PB + ROE (or PEV) rather than PE; high-growth tech/semi uses PEG + PS + forward PE; mature cash-flow-stable consumer uses DCF; asset-heavy industrials use EV/EBITDA — and explain why. (2) Analyze the *trend* of valuation over time and where the current multiple sits in its historical range (percentile), not just the point value. (3) Analyze how the price has moved around its valuation (e.g. earnings-driven vs multiple-expansion-driven moves), and whether a change in price reflects a change in fundamentals or merely a change in the multiple. (4) Distinguish trailing vs forward multiples — forward PE reflects expected future earnings, and a falling forward PE can signal either expected growth or a cheapening stock; be explicit about which. (5) For an ETF, analyze the fundamentals of its main constituent holdings, not the fund wrapper."
             + get_language_instruction()
+            + get_past_context_instruction(state)
         )
 
         prompt = ChatPromptTemplate.from_messages(

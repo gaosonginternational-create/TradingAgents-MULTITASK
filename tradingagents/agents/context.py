@@ -169,6 +169,30 @@ def build_instrument_context(
     return context
 
 
+def get_past_context_instruction(state: Mapping[str, Any]) -> str:
+    """Return an instruction embedding this run's past-context lessons, or "".
+
+    The Memory Log step writes ``past_context`` (same-ticker past decisions plus
+    cross-ticker lessons) before the analysts run, so every analyst can read its
+    own prior judgement and its outcome while forming a fresh report. Returns an
+    empty string when there are no lessons, so a first run pays no extra tokens.
+    """
+    past_context = state.get("past_context")
+    if not isinstance(past_context, str) or not past_context.strip():
+        return ""
+    return (
+        "\n\n## Your own past analyses (read before forming your view)\n"
+        "Below are your prior decisions on this instrument and related lessons, "
+        "with their outcomes where already known. Use them to (1) not repeat a "
+        "mistake you already learned from, (2) check whether today's data "
+        "confirms or reverses a thesis you held before, and (3) explicitly say "
+        "in your report when your current read disagrees with a past call and "
+        "why. Do not treat them as a fixed view: the data today may have moved "
+        "on.\n"
+        f"{past_context.strip()}"
+    )
+
+
 def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     """Return the instrument context for the current run.
 

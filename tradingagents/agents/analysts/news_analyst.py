@@ -1,7 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction, get_past_context_instruction
 from tradingagents.agents.tools import (
     get_cn_macro_indicators,
     get_global_news,
@@ -71,6 +71,7 @@ def create_news_analyst(llm):
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + macro_guidance
             + get_language_instruction()
+            + get_past_context_instruction(state)
         )
 
         prompt = ChatPromptTemplate.from_messages(

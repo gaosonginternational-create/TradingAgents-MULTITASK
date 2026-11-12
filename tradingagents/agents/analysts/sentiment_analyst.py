@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction, get_past_context_instruction
 from tradingagents.agents.post_screen import jev_screen
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.structured import (
@@ -169,7 +169,7 @@ def create_sentiment_analyst(llm):
             national_team_block=national_team_block,
             cn_wechat_block=cn_wechat_block,
             fingpt_sentiment_block=fingpt_sentiment_block,
-        )
+        ) + get_past_context_instruction(state)
 
         prompt = ChatPromptTemplate.from_messages(
             [

@@ -155,14 +155,25 @@ class GraphSetup:
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
 
         # The analysts work at the same time; the research debate starts once
-        # every one of them has filed its report. The memory log settles past
-        # decisions alongside them: only the Portfolio Manager reads its lessons.
-        first_steps = [spec.agent_node for spec in plan.specs]
+        # every one of them has filed its report. The memory log runs first so
+        # the past-context lessons it writes are available to the analysts (not
+        # just the Portfolio Manager): each analyst reads them before filing its
+        # report. It settles past decisions too, but a pass already running on
+        # the log is not waited for, so it stays fast when nothing is due.
+        analyst_nodes = [spec.agent_node for spec in plan.specs]
         if memory_node is not None:
+            # The memory log runs before the analysts so its past-context lessons
+            # reach them; the analysts then run in parallel, and the debate starts
+            # once every one of them has filed its report.
             workflow.add_node("Memory Log", memory_node)
-            first_steps.append("Memory Log")
-        for node in first_steps:
-            workflow.add_edge(START, node)
+            workflow.add_edge(START, "Memory Log")
+            for node in analyst_nodes:
+                workflow.add_edge("Memory Log", node)
+            first_steps = ["Memory Log", *analyst_nodes]
+        else:
+            first_steps = analyst_nodes
+            for node in analyst_nodes:
+                workflow.add_edge(START, node)
         workflow.add_edge(first_steps, "Bull Researcher")
 
         # Both research-debate edges share the complete DEBATE_PATH_MAP (#1088).
