@@ -730,3 +730,56 @@ loadTasks();
     localStorage.setItem('sidebarWidth', sidebar.getBoundingClientRect().width);
   });
 })();
+
+// ===== 历史报告区域拖拽调整高度 =====
+(function initReportResizer() {
+  const sidebar = document.querySelector('.sidebar');
+  const section = document.getElementById('reportSection');
+  const resizer = document.getElementById('reportResizer');
+  if (!sidebar || !section || !resizer) return;
+
+  // 从 localStorage 恢复上次高度（百分比）
+  const saved = localStorage.getItem('reportSectionHeight');
+  if (saved) {
+    const pct = parseFloat(saved);
+    if (pct >= 20 && pct <= 75) section.style.height = pct + '%';
+  }
+
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+  const sidebarH = () => sidebar.getBoundingClientRect().height;
+
+  resizer.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startY = e.clientY;
+    startH = section.getBoundingClientRect().height;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const sh = sidebarH();
+    if (!sh) return;
+    let h = startH + (e.clientY - startY);
+    const minH = Math.max(120, sh * 0.2);
+    const maxH = sh * 0.75;
+    h = Math.max(minH, Math.min(maxH, h));
+    // 用百分比保存，窗口缩放时也能自适应
+    section.style.height = (h / sh * 100) + '%';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const sh = sidebarH();
+    const h = section.getBoundingClientRect().height;
+    if (sh) localStorage.setItem('reportSectionHeight', (h / sh * 100));
+  });
+})();

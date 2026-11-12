@@ -19,13 +19,15 @@
 
     <button class="btn-new" onclick="showNewAnalysis()">+ 发起新分析</button>
 
-    <div class="side-section">
+    <div class="side-section" id="reportSection">
       <div class="side-label">
         <span>历史报告</span>
         <span class="side-count" id="reportCount"></span>
       </div>
       <div class="report-list" id="reportList"></div>
     </div>
+
+    <div class="section-resizer" id="reportResizer" title="拖拽调整历史报告区域高度"></div>
 
     <div class="side-section">
       <div class="side-label">
@@ -34,7 +36,7 @@
       </div>
     </div>
 
-    <div class="side-section">
+    <div class="side-section" id="taskSection">
       <div class="side-label">
         <span>任务记录</span>
         <button class="side-action" id="btnClearTasks" onclick="clearAllTasks()" title="清空全部任务记录">清空</button>

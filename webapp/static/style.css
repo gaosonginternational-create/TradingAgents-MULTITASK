@@ -77,6 +77,30 @@ body {
 .btn-new:hover { background: var(--accent-dim); }
 
 .side-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* 历史报告区：高度可拖拽调整，默认约占侧边栏 50% */
+#reportSection { flex: 0 0 auto; height: 50%; min-height: 120px; max-height: 75%; }
+#reportSection .report-list { flex: 1; min-height: 0; overflow-y: auto; }
+/* 定时任务区：只占标题高度，不参与平分 */
+#taskSection { flex: 1 1 auto; min-height: 80px; }
+.side-section:not(#reportSection):not(#taskSection) { flex: 0 0 auto; }
+
+/* 历史报告区域的下沿拖拽手柄 */
+.section-resizer {
+  height: 5px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  margin: -2px 0;
+  position: relative;
+  z-index: 10;
+  transition: background .15s;
+}
+.section-resizer:hover,
+.section-resizer.dragging {
+  background: var(--accent);
+}
+
 .side-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--text-faint); margin-bottom: 8px;
