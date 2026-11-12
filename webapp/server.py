@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -48,6 +49,115 @@ def clean_log_line(line: str) -> str:
     line = _ANSI_ESCAPE.sub("", line)
     line = _CTRL_CHARS.sub("", line)
     return line.rstrip("\r")
+
+
+# ===== 代理自动检测 =====
+# VPN 客户端的代理端口每次重连都会变（历史上出现过 10793/62274/57817/56044 等），
+# 把 HOST_PROXY 写死不可靠。这里动态探测当前可用的代理端口并自动写回 .env。
+
+# 常见 VPN/代理客户端的默认监听端口（Clash、V2Ray、Shadowsocks、各类梯子）
+_PROXY_CANDIDATE_PORTS = [
+    7890, 7891, 7897,  # Clash / Clash Verge
+    10808, 10809, 1080, 1081,  # V2RayN / SOCKS 常见
+    8118, 8888, 8080, 3128, 10080,  # 常见 HTTP 代理
+    33210,  # 历史出现过
+]
+
+# 历史上实际出现过的端口（用户 VPN 曾用过），优先探测
+_HISTORICAL_PROXY_PORTS = [10793, 62274, 57817, 56044, 60793]
+
+# 探测代理是否真的能翻墙的测试地址（Google 返回 302/200 即认为可用）
+_PROXY_TEST_URL = "https://www.google.com/generate_204"
+_PROXY_TEST_TIMEOUT = 5
+
+
+def _port_open(port: int) -> bool:
+    """判断本机某端口是否有进程监听。"""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except Exception:
+        return False
+
+
+def _proxy_can_reach_web(port: int) -> bool:
+    """测试某端口作为 HTTP 代理能否访问外网（Google），能通返回 True。"""
+    import urllib.request
+
+    proxy = urllib.request.ProxyHandler({
+        "http": f"http://127.0.0.1:{port}",
+        "https": f"http://127.0.0.1:{port}",
+    })
+    opener = urllib.request.build_opener(proxy)
+    try:
+        # generate_204 返回 204 无内容，连接成功即可；302/200 也视为可用
+        resp = opener.open(_PROXY_TEST_URL, timeout=_PROXY_TEST_TIMEOUT)
+        code = resp.getcode()
+        return code in (200, 204, 302, 301, 403, 429)
+    except Exception:
+        return False
+
+
+def detect_proxy_port() -> int | None:
+    """探测当前可用的翻墙代理端口，返回端口号；找不到返回 None。
+
+    优先级：历史出现过的端口 > 常见默认端口。
+    """
+    candidates = list(_HISTORICAL_PROXY_PORTS)
+    candidates += [p for p in _PROXY_CANDIDATE_PORTS if p not in candidates]
+    # 去重
+    seen = set()
+    ordered = [p for p in candidates if not (p in seen or seen.add(p))]
+    for port in ordered:
+        if not _port_open(port):
+            continue
+        if _proxy_can_reach_web(port):
+            return port
+    return None
+
+
+def _update_env_proxy(port: int | None) -> bool:
+    """把检测到的代理端口写回 .env 的 HOST_PROXY 行。port 为 None 时清空。"""
+    env_path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(env_path):
+        return False
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return False
+
+    new_value = f"http://host.docker.internal:{port}" if port else ""
+    found = False
+    out = []
+    for line in lines:
+        if line.strip().startswith("HOST_PROXY"):
+            out.append(f"HOST_PROXY={new_value}\n")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        # 末尾追加（若原值非空才需要加注释说明）
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.append("# --- 代理（自动检测写入）---\n")
+        out.append(f"HOST_PROXY={new_value}\n")
+
+    try:
+        tmp = env_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(out)
+        os.replace(tmp, env_path)
+        return True
+    except Exception:
+        return False
+
+
+def auto_config_proxy() -> int | None:
+    """自动检测代理并写回 .env，返回检测到的端口（None 表示未找到）。"""
+    port = detect_proxy_port()
+    _update_env_proxy(port)
+    return port
 
 # 内置常见 A 股/ETF 代码 -> 公司简称（补充：从报告正文自动学习 + 手动扩充）
 BUILTIN_COMPANY_NAMES = {
@@ -525,11 +635,34 @@ def _enqueue_scheduled_analysis(ticker: str, cfg: dict):
 
 
 def _schedule_worker():
-    """调度工作线程：串行消费队列，一个标的跑完再跑下一个。"""
+    """调度工作线程：串行消费队列，一个标的跑完再跑下一个。
+
+    每次取到新任务、真正开始执行前，先自动检测一次当前可用的代理端口并
+    写回 .env（VPN 端口每次重连都会变，不能写死），确保本批分析走最新代理。
+    """
     while True:
         try:
             ticker, date, analysts, task_id = _schedule_queue.get()
             try:
+                # 每次开始一个新标的前，重新探测代理端口（VPN 重连会变端口）
+                try:
+                    port = auto_config_proxy()
+                    if port:
+                        with TASKS_LOCK:
+                            task = RUNNING_TASKS.get(task_id)
+                            if task:
+                                task["log_lines"].append(
+                                    f"[代理] 已自动检测到可用代理端口 {port}，写入 HOST_PROXY"
+                                )
+                    else:
+                        with TASKS_LOCK:
+                            task = RUNNING_TASKS.get(task_id)
+                            if task:
+                                task["log_lines"].append(
+                                    "[代理] 未检测到可用翻墙代理，美股数据源可能超时"
+                                )
+                except Exception as e:
+                    pass
                 with TASKS_LOCK:
                     task = RUNNING_TASKS.get(task_id)
                     if task:
@@ -1142,6 +1275,15 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(STATIC_DIR, exist_ok=True)
+    # 启动时自动检测一次代理端口并写回 .env（VPN 端口每次重连会变）
+    try:
+        port = auto_config_proxy()
+        if port:
+            print(f"[代理] 已自动检测到可用代理端口 {port}，写入 .env 的 HOST_PROXY")
+        else:
+            print("[代理] 未检测到可用翻墙代理，美股数据源可能超时（可稍后重连 VPN）")
+    except Exception as e:
+        print(f"[代理] 自动检测异常: {e}")
     # 启动定时任务调度线程 + 串行执行工作线程
     scheduler = threading.Thread(target=_scheduler_loop, daemon=True)
     scheduler.start()
