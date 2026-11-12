@@ -410,6 +410,49 @@ SCHEDULES = _load_schedules()
 _last_schedule_trigger = {}
 
 
+def _ticker_analyzed_today(ticker: str) -> bool:
+    """判断某 ticker 今天是否已经跑过分析（含手动与定时）。
+
+    两个判据，命中任一即视为"已跑过"：
+      1. 报告目录里存在该 ticker 今天的报告（目录名形如 TICKER_YYYYMMDD_HHMMSS）；
+      2. 运行中/历史任务里有该 ticker 今天 starting/running/done 的任务（避免并发重复触发）。
+    """
+    t = (ticker or "").upper()
+    today_compact = datetime.now().strftime("%Y%m%d")
+
+    # 判据1：报告目录中是否存在 TICKER_YYYYMMDD_* 的报告
+    try:
+        if os.path.isdir(REPORTS_DIR):
+            prefix = f"{t}_"
+            for name in os.listdir(REPORTS_DIR):
+                if name.upper().startswith(prefix):
+                    # 目录名形如 TICKER_YYYYMMDD_HHMMSS
+                    m = re.match(rf"^{re.escape(t)}(\d{{8}})_", name.upper())
+                    if m and m.group(1) == today_compact:
+                        return True
+    except Exception:
+        pass
+
+    # 判据2：运行中/历史任务里今天该 ticker 的任务
+    try:
+        with TASKS_LOCK:
+            running = dict(RUNNING_TASKS)
+        merged = dict(TASKS_HISTORY)
+        merged.update(running)
+        for task in merged.values():
+            if (task.get("ticker") or "").upper() != t:
+                continue
+            task_date = task.get("date") or ""
+            if task_date == datetime.now().strftime("%Y-%m-%d"):
+                status = task.get("status")
+                if status in ("starting", "running", "done"):
+                    return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _should_trigger(ticker: str, cfg: dict) -> bool:
     """判断某 ticker 的定时任务此刻是否该触发。"""
     if not cfg.get("enabled", False):
@@ -421,7 +464,9 @@ def _should_trigger(ticker: str, cfg: dict) -> bool:
     # 已过设定的触发时刻（HH:MM），且今天尚未触发过
     if (now.hour, now.minute) >= (hour, minute):
         if _last_schedule_trigger.get(ticker) != today:
-            return True
+            # 若该标的今天已经跑过分析（手动或定时），则不再重复触发
+            if not _ticker_analyzed_today(ticker):
+                return True
     return False
 
 
