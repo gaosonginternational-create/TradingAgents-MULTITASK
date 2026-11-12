@@ -7,8 +7,10 @@ from tradingagents.dataflows.errors import (
     VendorUnavailableError,
 )
 from tradingagents.dataflows.vendors.akshare import (
+    get_announcements as get_akshare_announcements,
     get_balance_sheet as get_akshare_balance_sheet,
     get_cashflow as get_akshare_cashflow,
+    get_earnings_guidance as get_akshare_earnings_guidance,
     get_fundamentals as get_akshare_fundamentals,
     get_global_news as get_akshare_global_news,
     get_income_statement as get_akshare_income_statement,
@@ -74,7 +76,9 @@ TOOLS_CATEGORIES = {
             "get_valuation",
             "get_balance_sheet",
             "get_cashflow",
-            "get_income_statement"
+            "get_income_statement",
+            "get_announcements",
+            "get_earnings_guidance"
         ]
     },
     "news_data": {
@@ -146,6 +150,12 @@ VENDOR_METHODS = {
         "sec_edgar": get_sec_edgar_income_statement,
         "yfinance": get_yfinance_income_statement,
         "akshare": get_akshare_income_statement,
+    },
+    "get_announcements": {
+        "akshare": get_akshare_announcements,
+    },
+    "get_earnings_guidance": {
+        "akshare": get_akshare_earnings_guidance,
     },
     # news_data
     "get_news": {

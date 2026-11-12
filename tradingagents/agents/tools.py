@@ -346,3 +346,51 @@ def get_prediction_markets(
         str: A formatted markdown report of matching prediction markets
     """
     return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+
+
+@tool
+def get_announcements(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"] = None,
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"] = None,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve recent company announcements/disclosures for an A-share instrument
+    (业绩预告、业绩快报、重大合同、中标、扩产/产能、定增/增发、回购、增减持、
+    股权激励、分红、收购/并购/重组、订单/供货/客户等). Returns a bounded
+    markdown list of announcement titles, categories, dates and links, with the
+    earnings-relevant items surfaced first. Use this to find forward-looking
+    disclosures (guidance, capacity expansion, customer/order wins) that the
+    plain financial statements do not show.
+
+    Args:
+        start_date (str): Start date yyyy-mm-dd (omit for recent only)
+        end_date (str): End date yyyy-mm-dd (omit for recent only)
+    Returns:
+        str: A formatted markdown list of company announcements
+    """
+    return route_to_vendor("get_announcements", ticker, start_date, end_date)
+
+
+@tool
+def get_earnings_guidance(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"] = None,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve the company's own forward earnings guidance for an A-share
+    instrument: the 业绩预告 (profit forecast — predicted net-profit range, YoY
+    change, change reason, forecast type) and 业绩快报 (express report —
+    near-final revenue/net profit and YoY) for the latest report period. This is
+    the company's *guidance* on future earnings, which you should combine with
+    downstream-customer financials and capital expenditure to estimate future
+    company performance and compare it against the current valuation.
+
+    Args:
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
+    Returns:
+        str: A formatted markdown report of earnings guidance / express results
+    """
+    return route_to_vendor("get_earnings_guidance", ticker, as_of(curr_date, trade_date))

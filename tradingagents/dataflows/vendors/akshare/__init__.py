@@ -20,6 +20,10 @@ from tradingagents.dataflows.vendors.akshare.statements import (
     get_cashflow,
     get_income_statement,
 )
+from tradingagents.dataflows.vendors.akshare.announcements import (
+    get_announcements,
+    get_earnings_guidance,
+)
 
 __all__ = [
     "get_stock",
@@ -31,4 +35,6 @@ __all__ = [
     "get_income_statement",
     "get_balance_sheet",
     "get_cashflow",
+    "get_announcements",
+    "get_earnings_guidance",
 ]
