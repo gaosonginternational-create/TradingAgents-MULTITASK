@@ -82,6 +82,17 @@ def _render_statement(code: str, ticker: str, kind: str, df: pd.DataFrame) -> st
     rpt_name = latest.get("REPORT_DATE_NAME")
     period_label = f"{rpt_name}（{pd.to_datetime(rpt).strftime('%Y-%m-%d')}）" if rpt is not None else "最新报告期"
 
+    # Notice date (announcement / filing date). Eastmoney carries it as
+    # NOTICE_DATE; showing it lets the analyst see *when* the figures became
+    # public, which is what makes a point-in-time run auditable.
+    notice = latest.get("NOTICE_DATE")
+    notice_label = ""
+    if notice is not None and not pd.isna(notice):
+        try:
+            notice_label = f"，公告日 {pd.to_datetime(notice).strftime('%Y-%m-%d')}"
+        except (ValueError, TypeError):
+            notice_label = ""
+
     if kind == "profit":
         revenue = num("OPERATE_INCOME", "TOTAL_OPERATE_INCOME")
         cost = num("OPERATE_COST", "TOTAL_OPERATE_COST")
@@ -139,7 +150,7 @@ def _render_statement(code: str, ticker: str, kind: str, df: pd.DataFrame) -> st
         raise NoMarketDataError(ticker, code, f"no {kind} statement fields")
 
     header = f"# {title} for {code}（来自 {ticker}）\n\n"
-    headline = f"最新报告期：{period_label}\n\n" + "\n".join(lines)
+    headline = f"最新报告期：{period_label}{notice_label}\n\n" + "\n".join(lines)
 
     # Recent-period CSV, newest-first as Eastmoney returns it.
     csv = df.head(_MAX_PERIODS).to_csv(index=False)
@@ -150,6 +161,31 @@ def _fcf(ocf, capex):
     if ocf is None or capex is None:
         return None
     return ocf - capex
+
+
+def _filter_as_of(df: pd.DataFrame, as_of_date: str | None) -> pd.DataFrame:
+    """Keep only statement rows whose announcement date is on/before ``as_of_date``.
+
+    Eastmoney's statement tables carry ``NOTICE_DATE`` (the day the report was
+    announced / filed). Filtering on it makes an A-share run genuinely
+    point-in-time: a run dated 2026-11-12 sees the 2026 三季报 announced
+    2026-10-30, but a run dated 2026-10-01 does not — even though the report
+    period (2026-09-30) had already ended. Without this filter the analyst could
+    read figures that were not yet public on the analysis date (look-ahead bias);
+    withholding everything instead throws away data that *was* public. This is
+    the as-filed middle ground that SEC EDGAR gives US filers.
+
+    Returns ``df`` unchanged when there is no date to filter on or no
+    ``NOTICE_DATE`` column, and an empty frame when nothing was public yet.
+    """
+    if not as_of_date or "NOTICE_DATE" not in df.columns:
+        return df
+    notice = pd.to_datetime(df["NOTICE_DATE"], errors="coerce")
+    target = pd.to_datetime(as_of_date, errors="coerce")
+    if pd.isna(target):
+        return df
+    mask = notice.notna() & (notice <= target)
+    return df[mask]
 
 
 def _statement_entry(ticker: str, freq: str, as_of_date: str | None, kind: str, title: str) -> str:
@@ -163,6 +199,17 @@ def _statement_entry(ticker: str, freq: str, as_of_date: str | None, kind: str, 
     data = _fetch_statement(code, kind)
     if data is None or data.empty:
         raise_for_empty(ticker, code, f"{title} data")
+
+    # Point-in-time: drop reports not yet announced on the analysis date.
+    if as_of_date:
+        filtered = _filter_as_of(data, as_of_date)
+        if filtered is None or filtered.empty:
+            raise NoMarketDataError(
+                ticker, code,
+                f"no {title} was announced on or before {as_of_date} "
+                f"(the vendor reports NOTICE_DATE, so this is a real gap, not a fetch failure)",
+            )
+        data = filtered
 
     return _render_statement(code, ticker, kind, data)
 

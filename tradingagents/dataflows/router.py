@@ -273,6 +273,7 @@ def route_to_vendor(method: str, *args, **kwargs):
     # it, so put akshare first to serve it directly instead of burning through
     # failing US vendors on every news call. The configured order still applies
     # to US tickers and to all other categories.
+    cn_instrument = bool(args) and isinstance(args[0], str) and is_cn_market(args[0])
     if method in (
         "get_news",
         "get_global_news",
@@ -281,10 +282,42 @@ def route_to_vendor(method: str, *args, **kwargs):
         "get_balance_sheet",
         "get_cashflow",
     ) and args:
-        first_arg = args[0]
-        if isinstance(first_arg, str) and is_cn_market(first_arg):
+        if cn_instrument:
             if "akshare" in vendor_chain:
                 vendor_chain = ["akshare"] + [v for v in vendor_chain if v != "akshare"]
+
+    # Chinese-market statements/fundamentals must be served by AkShare alone.
+    # The US vendors (SEC EDGAR, yfinance, Alpha Vantage) date a statement by the
+    # period it covers and carry no filing date, so on a run dated before today
+    # they return a "withheld for this date" notice instead of the real figures.
+    # For an A-share that notice is doubly misleading: it reads as "this data is
+    # restricted" when the truth is "this vendor cannot serve A-shares at all",
+    # and it hides a genuine AkShare outage (e.g. an Eastmoney push2 throttle)
+    # behind a plausible-looking non-answer. Keeping AkShare alone means an
+    # outage surfaces as an honest "data unavailable, do not fabricate" instead.
+    # (SEC EDGAR/yfinance remain the correct primary for US filers.)
+    _CN_AKSHARE_ONLY = {
+        "get_income_statement",
+        "get_balance_sheet",
+        "get_cashflow",
+        "get_fundamentals",
+        "get_valuation",
+    }
+    if cn_instrument and method in _CN_AKSHARE_ONLY and "akshare" in vendor_chain:
+        vendor_chain = ["akshare"]
+
+    # No configured vendor serves insider transactions for a Chinese-market
+    # instrument (AkShare has no insider feed wired, and the US vendors only
+    # cover SEC Form 4 filers). Say so plainly instead of letting a US vendor's
+    # "withheld" notice stand in for an A-share, which the analyst would
+    # otherwise read as an insider signal being withheld for the date.
+    if method == "get_insider_transactions" and cn_instrument and "akshare" not in vendor_chain:
+        return (
+            f"DATA_UNAVAILABLE: insider-transaction data is not covered for "
+            f"Chinese-market instruments ('{args[0]}') by any configured vendor. "
+            f"Do not estimate or fabricate insider buying/selling; report it as "
+            f"unavailable for this instrument."
+        )
 
     last_no_data: NoMarketDataError | None = None
     last_unavailable: VendorUnavailableError | None = None
