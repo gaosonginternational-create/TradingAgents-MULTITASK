@@ -20,6 +20,7 @@ import logging
 
 import pandas as pd
 
+from tradingagents.dataflows.date_window import is_historical
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.vendors.akshare.common import (
     ak_retry,
@@ -163,6 +164,117 @@ def _fcf(ocf, capex):
     return ocf - capex
 
 
+# --- Sina statement fallback ---------------------------------------------
+# Eastmoney's *datacenter* host (not push2) serves the primary statements.
+# If it ever fails, Sina serves the same statements from a different host with
+# numerically identical figures (verified: 603986 2026三季报 营收/净利/归母
+# match to the cent). Sina carries only the report date (报告日), no filing
+# date, so it is used only for a today-dated run — a historical run keeps the
+# honest unavailable signal rather than risk look-ahead.
+_SINA_LABELS = {"profit": "利润表", "balance": "资产负债表", "cashflow": "现金流量表"}
+
+
+def _sina_symbol(code: str) -> str:
+    """``603986`` -> ``sh603986``; ``000001`` -> ``sz000001``."""
+    if code.startswith(("60", "68", "9")):
+        return f"sh{code}"
+    return f"sz{code}"
+
+
+def _fetch_sina_statement(code: str, kind: str):
+    """Sina structured statement (a different host from Eastmoney datacenter)."""
+    import akshare as ak
+
+    return ak_retry(lambda: ak.stock_financial_report_sina(
+        stock=_sina_symbol(code), symbol=_SINA_LABELS[kind]))
+
+
+def _render_sina_statement(code: str, ticker: str, kind: str, df) -> str:
+    """Render a Sina statement frame (Chinese columns) like the Eastmoney one."""
+    latest = df.iloc[0]
+
+    def num(*cols):
+        for c in cols:
+            if c in df.columns:
+                v = latest.get(c)
+                if v is not None and not pd.isna(v):
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return None
+        return None
+
+    def yi(v):
+        return None if v is None else f"{v / 1e8:.2f} 亿元"
+
+    rpt = str(latest.get("报告日") or "").strip()
+    period_label = f"{rpt[:4]}-{rpt[4:6]}-{rpt[6:8]}" if len(rpt) == 8 else (rpt or "最新报告期")
+
+    if kind == "profit":
+        revenue = num("营业总收入", "营业收入")
+        cost = num("营业成本")
+        gross = None if (revenue is None or cost is None) else revenue - cost
+        fields = [
+            ("营业收入", yi(revenue)),
+            ("营业成本", yi(cost)),
+            ("毛利润", yi(gross)),
+            ("销售费用", yi(num("销售费用"))),
+            ("管理费用", yi(num("管理费用"))),
+            ("研发费用", yi(num("研发费用"))),
+            ("财务费用", yi(num("财务费用"))),
+            ("营业利润", yi(num("营业利润"))),
+            ("利润总额", yi(num("利润总额"))),
+            ("净利润", yi(num("净利润"))),
+            ("归母净利润", yi(num("归属于母公司所有者的净利润"))),
+            ("扣非净利润", yi(num("扣除非经常性损益后的净利润"))),
+        ]
+        title = "利润表 Income Statement"
+        csv_cols = ["报告日", "营业总收入", "营业成本", "营业利润", "利润总额",
+                    "净利润", "归属于母公司所有者的净利润"]
+    elif kind == "balance":
+        total_assets = num("资产总计")
+        total_liab = num("负债合计")
+        debt_ratio = None if (total_assets is None or total_liab is None) else total_liab / total_assets * 100
+        fields = [
+            ("资产总计", yi(total_assets)),
+            ("流动资产", yi(num("流动资产合计"))),
+            ("货币资金", yi(num("货币资金"))),
+            ("应收账款", yi(num("应收账款", "应收票据及应收账款"))),
+            ("存货", yi(num("存货"))),
+            ("固定资产", yi(num("固定资产净额", "固定资产"))),
+            ("负债合计", yi(total_liab)),
+            ("流动负债", yi(num("流动负债合计"))),
+            ("股东权益合计", yi(num("所有者权益(或股东权益)合计", "所有者权益"))),
+            ("资产负债率", None if debt_ratio is None else f"{debt_ratio:.2f}%"),
+        ]
+        title = "资产负债表 Balance Sheet"
+        csv_cols = ["报告日", "资产总计", "货币资金", "应收账款", "存货",
+                    "负债合计", "所有者权益(或股东权益)合计"]
+    else:  # cashflow
+        fields = [
+            ("经营活动现金流净额", yi(num("经营活动产生的现金流量净额"))),
+            ("投资活动现金流净额", yi(num("投资活动产生的现金流量净额"))),
+            ("筹资活动现金流净额", yi(num("筹资活动产生的现金流量净额"))),
+            ("购建资产支付现金", yi(num("购建固定资产、无形资产和其他长期资产所支付的现金"))),
+            ("期末现金及等价物", yi(num("期末现金及现金等价物余额"))),
+        ]
+        title = "现金流量表 Cash Flow"
+        csv_cols = ["报告日", "经营活动产生的现金流量净额",
+                    "投资活动产生的现金流量净额", "筹资活动产生的现金流量净额",
+                    "购建固定资产、无形资产和其他长期资产所支付的现金"]
+
+    lines = [f"{label}: {v}" for label, v in fields if v is not None and v != ""]
+    if not lines:
+        raise NoMarketDataError(ticker, code, f"no {kind} statement fields (Sina)")
+
+    header = f"# {title} for {code}（来自 {ticker}，备用源：新浪）\n\n"
+    headline = f"最新报告期：{period_label}\n\n" + "\n".join(lines)
+
+    csv_cols = [c for c in csv_cols if c in df.columns]
+    csv = df.head(_MAX_PERIODS)[csv_cols].to_csv(index=False)
+    return f"{header}{headline}\n\n## 最近 {min(_MAX_PERIODS, len(df))} 期明细（新→旧）\n\n{csv}"
+
+
 def _filter_as_of(df: pd.DataFrame, as_of_date: str | None) -> pd.DataFrame:
     """Keep only statement rows whose announcement date is on/before ``as_of_date``.
 
@@ -196,22 +308,44 @@ def _statement_entry(ticker: str, freq: str, as_of_date: str | None, kind: str, 
         )
     code = normalize_ak_symbol(ticker)
 
-    data = _fetch_statement(code, kind)
+    em_error = None
+    data = None
+    source = "eastmoney"
+    try:
+        data = _fetch_statement(code, kind)
+    except Exception as exc:  # noqa: BLE001 - fall back to Sina below
+        em_error = exc
+        logger.warning("Eastmoney %s unavailable for %s: %s", kind, code, exc)
+
+    # Sina fallback only for a today-dated run: Sina has no filing date, so a
+    # historical run cannot prove these figures were public on that date.
+    if (data is None or data.empty) and not is_historical(as_of_date):
+        try:
+            data = _fetch_sina_statement(code, kind)
+            source = "sina"
+            logger.warning("Using Sina %s fallback for %s", kind, code)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Sina %s fallback also failed for %s: %s", kind, code, exc)
+
     if data is None or data.empty:
+        if em_error is not None:
+            raise em_error
         raise_for_empty(ticker, code, f"{title} data")
 
-    # Point-in-time: drop reports not yet announced on the analysis date.
-    if as_of_date:
-        filtered = _filter_as_of(data, as_of_date)
-        if filtered is None or filtered.empty:
-            raise NoMarketDataError(
-                ticker, code,
-                f"no {title} was announced on or before {as_of_date} "
-                f"(the vendor reports NOTICE_DATE, so this is a real gap, not a fetch failure)",
-            )
-        data = filtered
+    if source == "eastmoney":
+        # Point-in-time: drop reports not yet announced on the analysis date.
+        if as_of_date:
+            filtered = _filter_as_of(data, as_of_date)
+            if filtered is None or filtered.empty:
+                raise NoMarketDataError(
+                    ticker, code,
+                    f"no {title} was announced on or before {as_of_date} "
+                    f"(the vendor reports NOTICE_DATE, so this is a real gap, not a fetch failure)",
+                )
+            data = filtered
+        return _render_statement(code, ticker, kind, data)
 
-    return _render_statement(code, ticker, kind, data)
+    return _render_sina_statement(code, ticker, kind, data)
 
 
 def get_income_statement(
