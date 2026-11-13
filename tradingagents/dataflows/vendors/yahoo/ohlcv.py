@@ -50,8 +50,18 @@ def _download_cn_ohlcv(canonical: str, start_str: str, end_str: str):
 
 
 def _cn_hist(canonical: str, start_str: str, end_str: str):
-    """Call the right AkShare endpoint for an A-share / HK / ETF symbol."""
+    """Call the right AkShare endpoint for an A-share / HK / ETF symbol.
+
+    A-share daily bars go through ``fetch_a_share_daily`` (push2, then Sina as a
+    different-host fallback when Eastmoney rate-limits the IP). Every call is
+    wrapped so a vendor failure surfaces as a typed ``VendorUnavailableError``
+    instead of escaping raw — without that, a push2 rate limit raised here would
+    propagate through ``load_ohlcv`` → ``build_verified_market_snapshot`` and
+    kill the whole analyst node (the tool layer only catches the typed errors).
+    """
     from tradingagents.dataflows.vendors.akshare.common import (
+        ak_quote_retry,
+        fetch_a_share_daily,
         is_etf,
         is_hk,
         normalize_ak_symbol,
@@ -63,13 +73,14 @@ def _cn_hist(canonical: str, start_str: str, end_str: str):
     end = end_str.replace("-", "")
     code = normalize_ak_symbol(canonical)
     if is_hk(canonical):
-        return ak.stock_hk_hist(symbol=code, period="daily", start_date=start,
-                                end_date=end, adjust="qfq")
+        return ak_quote_retry(lambda: ak.stock_hk_hist(
+            symbol=code, period="daily", start_date=start,
+            end_date=end, adjust="qfq"))
     if is_etf(canonical):
-        return ak.fund_etf_hist_em(symbol=code, period="daily", start_date=start,
-                                   end_date=end, adjust="qfq")
-    return ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start,
-                              end_date=end, adjust="qfq")
+        return ak_quote_retry(lambda: ak.fund_etf_hist_em(
+            symbol=code, period="daily", start_date=start,
+            end_date=end, adjust="qfq"))
+    return fetch_a_share_daily(code, start, end, adjust="qfq")
 
 # A vendor's latest OHLCV row this many calendar days before the requested date
 # is treated as stale. Generous enough to span long holiday weekends, tight

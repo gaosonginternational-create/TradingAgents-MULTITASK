@@ -14,6 +14,34 @@ from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableE
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
 
+# The single raw router entry, kept apart from ``_safe_route`` so the wrapper
+# cannot end up calling itself.
+_route = route_to_vendor
+
+
+def _safe_route(method: str, *args, **kwargs) -> str:
+    """``route_to_vendor`` that never raises: a vendor blow-up becomes a sentinel.
+
+    An exception out of a tool ends the whole graph run — the analyst node wraps
+    no tool call in try/except. So an unexpected vendor failure (a push2 rate
+    limit raised outside a wrapped call, a schema change upstream, a network
+    error) must degrade to a "data unavailable, do not fabricate" message the
+    model can read and work around, instead of aborting the analysis. Typed
+    failures get the same instructive sentinels the router already emits.
+    """
+    try:
+        return _route(method, *args, **kwargs)
+    except VendorUnavailableError as exc:
+        return vendor_unavailable(method, exc)
+    except NoMarketDataError as exc:
+        return no_data_available(exc)
+    except Exception as exc:  # noqa: BLE001 - a tool must not end the run
+        return (
+            f"DATA_UNAVAILABLE: {method} failed unexpectedly "
+            f"({type(exc).__name__}: {exc}). Do not estimate or fabricate values; "
+            f"report this data as unavailable for the instrument."
+        )
+
 
 @tool
 def get_stock_data(
@@ -35,7 +63,7 @@ def get_stock_data(
         start_date, end_date = as_of_window(start_date, end_date, trade_date)
     except ValueError as e:
         return str(e)
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    return _safe_route("get_stock_data", symbol, start_date, end_date)
 
 
 @tool
@@ -63,7 +91,7 @@ def get_indicators(
     results = []
     for ind in indicators:
         try:
-            results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
+            results.append(_safe_route("get_indicators", symbol, ind, curr_date, look_back_days))
         except ValueError as e:
             results.append(str(e))
     return "\n\n".join(results)
@@ -92,6 +120,13 @@ def get_verified_market_snapshot(
         return vendor_unavailable("get_verified_market_snapshot", exc)
     except NoMarketDataError as exc:
         return no_data_available(exc)
+    except Exception as exc:  # noqa: BLE001 - a tool must not end the run
+        return (
+            f"DATA_UNAVAILABLE: get_verified_market_snapshot failed unexpectedly "
+            f"({type(exc).__name__}: {exc}). Do not estimate or fabricate prices, "
+            f"indicators, or support/resistance levels; report the price data as "
+            f"unavailable and rely only on what other tools return."
+        )
 
 
 @tool
@@ -108,7 +143,7 @@ def get_fundamentals(
     Returns:
         str: A formatted report containing comprehensive fundamental data
     """
-    return route_to_vendor("get_fundamentals", ticker, as_of(curr_date, trade_date))
+    return _safe_route("get_fundamentals", ticker, as_of(curr_date, trade_date))
 
 
 @tool
@@ -127,7 +162,7 @@ def get_balance_sheet(
     Returns:
         str: A formatted report containing balance sheet data
     """
-    return route_to_vendor("get_balance_sheet", ticker, freq, as_of(curr_date, trade_date))
+    return _safe_route("get_balance_sheet", ticker, freq, as_of(curr_date, trade_date))
 
 
 @tool
@@ -146,7 +181,7 @@ def get_cashflow(
     Returns:
         str: A formatted report containing cash flow statement data
     """
-    return route_to_vendor("get_cashflow", ticker, freq, as_of(curr_date, trade_date))
+    return _safe_route("get_cashflow", ticker, freq, as_of(curr_date, trade_date))
 
 
 @tool
@@ -165,7 +200,7 @@ def get_income_statement(
     Returns:
         str: A formatted report containing income statement data
     """
-    return route_to_vendor("get_income_statement", ticker, freq, as_of(curr_date, trade_date))
+    return _safe_route("get_income_statement", ticker, freq, as_of(curr_date, trade_date))
 
 
 @tool
@@ -188,7 +223,7 @@ def get_news(
         start_date, end_date = as_of_window(start_date, end_date, trade_date)
     except ValueError as e:
         return str(e)
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    return _safe_route("get_news", ticker, start_date, end_date)
 
 
 @tool
@@ -212,7 +247,7 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", as_of(curr_date, trade_date), look_back_days, limit)
+    return _safe_route("get_global_news", as_of(curr_date, trade_date), look_back_days, limit)
 
 
 @tool
@@ -226,7 +261,7 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker, trade_date or None)
+    return _safe_route("get_insider_transactions", ticker, trade_date or None)
 
 
 @tool
@@ -249,7 +284,7 @@ def get_valuation(
     Returns:
         str: A formatted valuation report
     """
-    return route_to_vendor("get_valuation", ticker, as_of(curr_date, trade_date))
+    return _safe_route("get_valuation", ticker, as_of(curr_date, trade_date))
 
 
 @tool
@@ -284,7 +319,7 @@ def get_macro_indicators(
     Returns:
         str: A formatted markdown report of the macro series
     """
-    return route_to_vendor("get_macro_indicators", indicator, as_of(curr_date, trade_date), look_back_days)
+    return _safe_route("get_macro_indicators", indicator, as_of(curr_date, trade_date), look_back_days)
 
 
 @tool
@@ -318,7 +353,17 @@ def get_cn_macro_indicators(
     """
     from tradingagents.dataflows.vendors.akshare.macro import get_cn_macro_data
 
-    return get_cn_macro_data(indicator, as_of(curr_date, trade_date), look_back_days)
+    try:
+        return get_cn_macro_data(indicator, as_of(curr_date, trade_date), look_back_days)
+    except VendorUnavailableError as exc:
+        return vendor_unavailable("get_cn_macro_indicators", exc)
+    except NoMarketDataError as exc:
+        return no_data_available(exc)
+    except Exception as exc:  # noqa: BLE001 - a tool must not end the run
+        return (
+            f"DATA_UNAVAILABLE: get_cn_macro_indicators failed "
+            f"({type(exc).__name__}: {exc}). Proceed without it; do not fabricate values."
+        )
 
 
 @tool
@@ -345,7 +390,7 @@ def get_prediction_markets(
     Returns:
         str: A formatted markdown report of matching prediction markets
     """
-    return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+    return _safe_route("get_prediction_markets", topic, limit, trade_date or None)
 
 
 @tool
@@ -370,7 +415,7 @@ def get_announcements(
     Returns:
         str: A formatted markdown list of company announcements
     """
-    return route_to_vendor("get_announcements", ticker, start_date, end_date)
+    return _safe_route("get_announcements", ticker, start_date, end_date)
 
 
 @tool
@@ -393,7 +438,7 @@ def get_earnings_guidance(
     Returns:
         str: A formatted markdown report of earnings guidance / express results
     """
-    return route_to_vendor("get_earnings_guidance", ticker, as_of(curr_date, trade_date))
+    return _safe_route("get_earnings_guidance", ticker, as_of(curr_date, trade_date))
 
 
 @tool
@@ -411,7 +456,7 @@ def get_research_reports(
     Returns:
         str: A formatted markdown block of research reports and EPS forecasts
     """
-    return route_to_vendor("get_research_reports", ticker, trade_date or None)
+    return _safe_route("get_research_reports", ticker, trade_date or None)
 
 
 @tool
@@ -432,4 +477,4 @@ def get_downstream_analysis(
     Returns:
         str: A formatted markdown block of downstream-customer demand signals
     """
-    return route_to_vendor("get_downstream_analysis", ticker, trade_date or None)
+    return _safe_route("get_downstream_analysis", ticker, trade_date or None)

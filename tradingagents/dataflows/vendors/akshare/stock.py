@@ -7,7 +7,9 @@ from datetime import datetime
 
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.vendors.akshare.common import (
+    ak_quote_retry,
     ak_retry,
+    fetch_a_share_daily,
     is_a_share,
     is_etf,
     is_hk,
@@ -41,7 +43,7 @@ def get_stock(
 
     if is_hk(symbol):
         code = normalize_ak_symbol(symbol)  # e.g. 00700
-        data = ak_retry(
+        data = ak_quote_retry(
             lambda: ak.stock_hk_hist(
                 symbol=code,
                 period="daily",
@@ -53,7 +55,7 @@ def get_stock(
     elif is_etf(symbol):
         # ETF/LOF: no fundamentals, quotes come from the fund endpoint.
         code = normalize_ak_symbol(symbol)  # 588170
-        data = ak_retry(
+        data = ak_quote_retry(
             lambda: ak.fund_etf_hist_em(
                 symbol=code,
                 period="daily",
@@ -64,15 +66,8 @@ def get_stock(
         )
     elif is_a_share(symbol):
         code = normalize_ak_symbol(symbol)  # 600519
-        data = ak_retry(
-            lambda: ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start,
-                end_date=end,
-                adjust="qfq",
-            )
-        )
+        # push2 first, Sina fallback when Eastmoney rate-limits the IP.
+        data = fetch_a_share_daily(code, start, end, adjust="qfq")
     else:
         # Not a Chinese-market symbol: signal "no data" so the router tries the
         # next vendor (yfinance etc.) rather than mis-pricing a US ticker.
