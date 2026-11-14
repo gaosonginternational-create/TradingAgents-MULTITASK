@@ -456,7 +456,7 @@ def get_research_reports(
     Returns:
         str: A formatted markdown block of research reports and EPS forecasts
     """
-    return _safe_route("get_research_reports", ticker, trade_date or None)
+    return _safe_route("get_research_reports", ticker)
 
 
 @tool
@@ -477,4 +477,4 @@ def get_downstream_analysis(
     Returns:
         str: A formatted markdown block of downstream-customer demand signals
     """
-    return _safe_route("get_downstream_analysis", ticker, trade_date or None)
+    return _safe_route("get_downstream_analysis", ticker)

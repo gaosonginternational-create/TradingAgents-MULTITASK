@@ -41,6 +41,35 @@ _HOST_ALIASES = ["host.docker.internal", "172.17.0.1"]
 
 _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
 
+# Domestic data hosts must never be routed through the VPN. They are reachable
+# directly, and sending them through a flaky proxy means a dropped VPN takes
+# A-share quotes, statements and announcements down with it — seen when a
+# container briefly lost its route to the host proxy and every Eastmoney call
+# failed with "Network is unreachable" even though the site itself was fine.
+_DOMESTIC_NO_PROXY = (
+    "eastmoney.com", ".eastmoney.com",
+    "sina.com.cn", ".sina.com.cn", "sina.com", ".sina.com",
+    "cninfo.com.cn", ".cninfo.com.cn",
+    "qq.com", ".qq.com",
+    "baidu.com", ".baidu.com",
+    "10jqka.com.cn", ".10jqka.com.cn",
+    "hexun.com", ".hexun.com",
+    "163.com", ".163.com",
+)
+
+
+def _merge_no_proxy() -> None:
+    """Ensure domestic hosts bypass any proxy (both env spellings)."""
+    current = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
+    items = [x.strip() for x in current.split(",") if x.strip()]
+    lowered = {x.lower() for x in items}
+    for host in _DOMESTIC_NO_PROXY:
+        if host.lower() not in lowered:
+            items.append(host)
+    value = ",".join(items)
+    os.environ["NO_PROXY"] = value
+    os.environ["no_proxy"] = value
+
 
 def _apply_proxy(url: str | None) -> None:
     """Point every proxy env var at ``url`` (or clear them all when None)."""
@@ -92,6 +121,9 @@ def ensure_proxy(log=None) -> str | None:
     """
     emit = log or (lambda msg: print(msg, flush=True))
     try:
+        # Domestic hosts bypass the proxy whatever else happens.
+        _merge_no_proxy()
+
         configured = (
             os.getenv("HOST_PROXY", "").strip()
             or os.getenv("HTTPS_PROXY", "").strip()

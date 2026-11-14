@@ -91,7 +91,7 @@ _DEMAND_KEYWORDS = (
 )
 
 
-def get_research_reports(ticker: str, limit: int = 15) -> str:
+def get_research_reports(ticker: str, *, limit: int = 15) -> str:
     """Sell-side research reports + multi-year EPS forecasts for an A-share.
 
     Returns a bounded markdown block: each report's rating, brokerage, date,
@@ -154,7 +154,7 @@ def get_research_reports(ticker: str, limit: int = 15) -> str:
     return "\n".join(lines).rstrip()
 
 
-def get_downstream_analysis(ticker: str, limit: int = 6) -> str:
+def get_downstream_analysis(ticker: str, *, limit: int = 6) -> str:
     """Downstream-customer demand triangulation for an A-share ``ticker``.
 
     Resolves the target's downstream customers (curated map, with analyst
