@@ -50,12 +50,15 @@ def _data_root() -> str:
             os.path.dirname(os.path.abspath(__file__))))), "data")
     home = os.path.expanduser(os.path.join("~", ".tradingagents"))
 
-    candidates = [c for c in (env, repo_data, home) if c]
+    # Home (the container's mount) is checked before the repo copy: an image
+    # that happens to carry a stale data/ must never shadow the live volume.
+    candidates = [c for c in (env, home, repo_data) if c]
     for c in candidates:
         if os.path.exists(os.path.join(c, "ima", "store.jsonl")):
             return c
     for c in candidates:
-        if os.path.isdir(c):
+        # A real data home has been used at least once (logs/cache exist).
+        if os.path.isdir(os.path.join(c, "logs")) or os.path.isdir(os.path.join(c, "cache")):
             return c
     return repo_data
 

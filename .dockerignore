@@ -13,3 +13,6 @@ results
 eval_results
 Dockerfile
 docker-compose.yml
+
+# 用户数据（报告/日志/缓存/ima 同步内容）不进镜像，运行时由挂载卷提供
+data
