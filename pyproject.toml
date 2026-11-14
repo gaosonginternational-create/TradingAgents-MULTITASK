@@ -9,7 +9,13 @@ description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "akshare>=1.16.0",
+    # Pinned deliberately: 1.20.4x+ renamed/reshaped several interfaces this
+    # project depends on (stock_zh_a_hist -> stock_zh_a_hist_em, stock_zh_a_daily
+    # -> stock_zh_a_daily_sina, and `stock=`/`security=` kwargs dropped from
+    # stock_financial_report_sina / stock_individual_notice_report), which breaks
+    # A-share quotes, statements and announcements. 1.20.37 is the version every
+    # vendor path is validated against; bumping it is a migration, not a patch.
+    "akshare==1.20.37",
     "cryptography>=42.0",
     "langchain-core>=1.6.5",
     "langchain-anthropic>=1.7.4",
