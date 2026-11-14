@@ -217,6 +217,18 @@ def _fetch_subreddit_rss(
             )
             time.sleep(wait)
             return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
+        if exc.code in (401, 403):
+            # Reddit stopped serving anonymous RSS to non-browser clients: the
+            # old.reddit host now answers with a login wall and www 403s. This
+            # is not a bug on our side and not fatal — the sentiment analyst has
+            # StockTwits / SentiSense / news to work from, so say so plainly
+            # instead of looking like a crash.
+            logger.warning(
+                "Reddit RSS blocked (HTTP %s) for r/%s · %s — Reddit no longer "
+                "serves anonymous RSS; continuing with the other sentiment sources",
+                exc.code, sub, ticker,
+            )
+            return None
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
         return None
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:

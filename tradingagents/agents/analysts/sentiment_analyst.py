@@ -102,20 +102,34 @@ def create_sentiment_analyst(llm):
         # Pass the analysis window so a historical run trims social posts to it
         # instead of leaking today's chatter into a backtest (#1220).
         screen = jev_screen(ticker)
-        stocktwits_block = fetch_stocktwits_messages(
-            ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen
-        )
-        sentisense_block = fetch_sentisense_sentiment(
-            ticker, start_date=start_date, end_date=end_date
-        )
-        subreddits = subreddits_for(ticker)
-        reddit_block = fetch_reddit_posts(
-            ticker, subreddits, start_date=start_date, end_date=end_date, screen=screen
-        )
+
+        # US social feeds (StockTwits / SentiSense / Reddit) carry no coverage
+        # for an A-share / HK / ETF, so calling them for a domestic ticker only
+        # spends a request — and a Reddit 403/429, which is now Reddit's default
+        # answer to anonymous RSS — to fill a placeholder. Skip them outright and
+        # say so, so the analyst knows the silence is "not applicable", not "no
+        # discussion observed".
+        cn_market = is_cn_market(ticker)
+        if cn_market:
+            _na = ("<not applicable: this is a US social feed with no coverage "
+                   "for A-share/HK/ETF instruments; use the domestic sentiment "
+                   "blocks below>")
+            stocktwits_block = sentisense_block = reddit_block = _na
+            subreddits = ()
+        else:
+            stocktwits_block = fetch_stocktwits_messages(
+                ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen
+            )
+            sentisense_block = fetch_sentisense_sentiment(
+                ticker, start_date=start_date, end_date=end_date
+            )
+            subreddits = subreddits_for(ticker)
+            reddit_block = fetch_reddit_posts(
+                ticker, subreddits, start_date=start_date, end_date=end_date, screen=screen
+            )
         # Domestic (A-share/HK/ETF) tickers get an Eastmoney sentiment block:
         # the US sources (StockTwits/SentiSense/Reddit) don't cover them, so a
         # domestic read replaces those placeholders with real signal.
-        cn_market = is_cn_market(ticker)
         cn_sentiment_block = ""
         cn_moneyflow_block = ""
         cn_orderbook_block = ""
