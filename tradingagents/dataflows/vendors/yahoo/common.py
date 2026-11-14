@@ -61,17 +61,37 @@ def _answered_empty(exc: Exception) -> bool:
     return getattr(getattr(exc, "response", None), "status_code", None) == 404
 
 
+# Transient in-transit failures worth retrying: a VPN/proxy blip, a socket read
+# timeout, or a dropped connection says nothing about the symbol. Retrying these
+# (unlike a rate limit, an auth failure, or a bad symbol) turns a momentary
+# hiccup that used to blank an entire price series into a short pause.
+_TRANSIENT_ERROR_NAMES = (
+    "Timeout", "ReadTimeout", "ConnectTimeout", "ConnectionError",
+    "RemoteDisconnected", "IncompleteRead", "BadStatusLine", "ProtocolError",
+    "ChunkedEncodingError", "SSLError",
+)
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is a transient network failure worth one more attempt."""
+    name = type(exc).__name__
+    if any(k in name for k in _TRANSIENT_ERROR_NAMES):
+        return True
+    return isinstance(exc, (TimeoutError, ConnectionResetError, ConnectionAbortedError))
+
+
 def yf_retry(func, max_retries=3, base_delay=2.0):
-    """Execute a yfinance call with exponential backoff on rate limits.
+    """Execute a yfinance call with exponential backoff on rate limits and blips.
 
     yfinance raises YFRateLimitError on HTTP 429 responses but does not
-    retry them internally, so this wrapper retries them. A rate limit that
-    outlasts the retries, or any other exception, is raised as
-    VendorUnavailableError: it failed in transit and says nothing about the
-    symbol. Yahoo answering that it has nothing for the symbol returns None,
-    an empty answer. ``func`` should build its own Ticker and make the request
-    itself: a Ticker keeps a failed ``info`` fetch as done, so asking the same
-    one again reads an empty profile.
+    retry them internally, so this wrapper retries them. A transient network
+    failure (timeout / dropped connection, common behind a VPN) is retried the
+    same way, since it also failed in transit and says nothing about the symbol.
+    A rate limit that outlasts the retries, an unrecoverable error, or any other
+    exception is raised as VendorUnavailableError. Yahoo answering that it has
+    nothing for the symbol returns None, an empty answer. ``func`` should build
+    its own Ticker and make the request itself: a Ticker keeps a failed ``info``
+    fetch as done, so asking the same one again reads an empty profile.
     """
     for attempt in range(max_retries + 1):
         try:
@@ -88,4 +108,12 @@ def yf_retry(func, max_retries=3, base_delay=2.0):
         except Exception as exc:
             if _answered_empty(exc):
                 return None
+            if _is_transient_network_error(exc) and attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Yahoo Finance transient failure (%s), retrying in %.0fs "
+                    "(attempt %d/%d)", type(exc).__name__, delay, attempt + 1, max_retries,
+                )
+                time.sleep(delay)
+                continue
             raise VendorUnavailableError(f"Yahoo Finance request failed: {type(exc).__name__}") from exc

@@ -75,7 +75,8 @@ def invoke_structured(structured_llm: Any | None, prompt: Any, agent_name: str) 
         return result
     except Exception as exc:
         logger.warning(
-            "%s: structured-output invocation failed (%s); retrying once as free text",
+            "%s: structured-output invocation failed (%s); falling back to "
+            "free-text generation (non-fatal — the report is still produced)",
             agent_name, exc,
         )
         return None
