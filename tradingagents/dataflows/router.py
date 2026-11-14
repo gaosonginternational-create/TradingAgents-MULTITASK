@@ -6,6 +6,9 @@ from tradingagents.dataflows.errors import (
     VendorNotConfiguredError,
     VendorUnavailableError,
 )
+from tradingagents.dataflows.vendors.ima import (
+    get_ima_knowledge as get_ima_knowledge,
+)
 from tradingagents.dataflows.vendors.akshare import (
     get_announcements as get_akshare_announcements,
     get_balance_sheet as get_akshare_balance_sheet,
@@ -90,6 +93,7 @@ TOOLS_CATEGORIES = {
             "get_news",
             "get_global_news",
             "get_insider_transactions",
+            "get_ima_knowledge"
         ]
     },
     "macro_data": {
@@ -165,6 +169,9 @@ VENDOR_METHODS = {
     },
     "get_downstream_analysis": {
         "akshare": get_akshare_downstream_analysis,
+    },
+    "get_ima_knowledge": {
+        "ima": get_ima_knowledge,
     },
     # news_data
     "get_news": {

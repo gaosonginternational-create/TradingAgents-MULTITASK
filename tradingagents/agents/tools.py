@@ -478,3 +478,28 @@ def get_downstream_analysis(
         str: A formatted markdown block of downstream-customer demand signals
     """
     return _safe_route("get_downstream_analysis", ticker)
+
+
+@tool
+def get_ima_knowledge(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve the user's curated ima knowledge base (财联社 电报, 芯榜/芯智讯/
+    半导体行业观察/梓豪谈芯 深度文章, 36氪, 研报 PDF/PPT/Excel) filtered to this
+    instrument. Returns four grouped views — 公司自身 / 上下游与供应链 /
+    行业与周期 / 宏观与政策 — with trend words flagged, plus a 复盘 scorecard of
+    earlier predictions and whether they were verified.
+
+    Use it to reason about the *industry chain* (upstream materials/equipment,
+    downstream customers/demand), the industry cycle (pricing, inventory,
+    capacity, share shifts), and macro policy (rates, tariffs, regulation) —
+    and to spot *changes in trend* rather than current levels. In the 复盘
+    section, treat verified hits as evidence to weight up and misses as
+    hypotheses to correct, then state your own falsifiable expectation.
+
+    Returns:
+        str: A formatted markdown brief from the ima corpus
+    """
+    return _safe_route("get_ima_knowledge", ticker, trade_date or None)

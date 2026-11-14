@@ -5,6 +5,7 @@ from tradingagents.agents.context import get_instrument_context_from_state, get_
 from tradingagents.agents.tools import (
     get_cn_macro_indicators,
     get_global_news,
+    get_ima_knowledge,
     get_macro_indicators,
     get_news,
     get_prediction_markets,
@@ -15,6 +16,7 @@ from tradingagents.dataflows.vendors.local_knowledge import fetch_local_knowledg
 TOOLS = (
     get_news,
     get_global_news,
+    get_ima_knowledge,
     get_macro_indicators,
     get_cn_macro_indicators,
     get_prediction_markets,
@@ -86,6 +88,16 @@ def create_news_analyst(llm):
 
         system_message = (
             f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), get_cn_macro_indicators(indicator, curr_date, look_back_days) for China macro (e.g. 'pmi', 'cpi', 'ppi', 'gdp', 'm2', 'industrial_production', 'retail_sales', 'lpr'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
+            + """
+Also call get_ima_knowledge to read the user's curated corpus (财联社电报、芯榜/芯智讯/半导体行业观察/梓豪谈芯 深度稿、36氪、研报). Use it for what free feeds cannot give you:
+  1. **产业链位置**：上游是哪些材料/设备/代工，下游是哪些客户与终端需求，量价与产能如何传导到本标的；
+  2. **行业周期**：供给（扩产/减产/库存）、需求（拉货/去库/渗透率）、价格（涨价/跌价）、份额与国产替代进展；
+  3. **宏观与政策**：利率、关税、出口管制、监管口径变化对这条产业链的方向性影响；
+  4. **趋势变化优先于水平**：重点抓"首次/上调/下调/超预期/转正/转负/加速/放缓/涨价/缺货"这类措辞，判断边际变化的方向与速度，而不是复述现状；
+  5. **复盘闭环**：get_ima_knowledge 末尾的"复盘"是历史预测及其验证结果（✓命中/✗证伪/⏳待验证）。先解释被证伪的判断错在哪（假设错、时点错、还是噪声），被验证的驱动因素加权，被证伪的降权或剔除，再形成本次结论；
+  6. **给出可证伪的预测**：明确方向（up/down/flat）、时间窗、触发条件与观测指标，便于下一轮自动验证；
+  7. **新闻与股价/估值/情绪的映射**：对每条关键新闻，说明它影响的是情绪面、未来增长（订单/收入/毛利）、还是估值倍数（风险偏好/利率），并给出传导路径与滞后时间。
+"""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + local_knowledge_section
             + macro_guidance
