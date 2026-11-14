@@ -89,6 +89,13 @@ def analyze(
             raise typer.Exit(code=1) from None
 
     try:
+        # The host VPN's proxy port changes on reconnect, so verify from inside
+        # the container (where the calls actually leave from) and switch to a
+        # live port when the configured one is dead. Best-effort: a missing
+        # proxy degrades US data only, never the run.
+        from tradingagents.proxy import ensure_proxy
+
+        ensure_proxy(log=console.print)
         flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html}
         run_analysis(checkpoint=checkpoint, portfolio=portfolio_context, flags=flags)
     except _NO_CONSOLE_ERRORS:
