@@ -159,6 +159,47 @@ def auto_config_proxy() -> int | None:
     _update_env_proxy(port)
     return port
 
+
+def _read_env_proxy_port() -> int | None:
+    """读取 .env 中 HOST_PROXY 配置的端口号；未配置或格式不对返回 None。"""
+    env_path = os.path.join(BASE_DIR, ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("HOST_PROXY="):
+                    val = s.split("=", 1)[1].strip()
+                    m = re.search(r":(\d+)\s*$", val)
+                    return int(m.group(1)) if m else None
+    except Exception:
+        return None
+    return None
+
+
+def ensure_proxy() -> tuple[int | None, str]:
+    """确保当前有一个可用代理，返回 ``(端口, 状态说明)``。
+
+    每次发起分析前调用（手动点和定时任务都走同一条路）：
+    1. 先用 .env 里已配置的端口实测一次 —— 能用就直接用，省掉全端口扫描；
+    2. 不能用（VPN 重连后端口变了是常态）就重新探测、写回 .env，
+       并同步更新本进程的 ``os.environ``，让随后启动的 compose 拿到新值。
+    """
+    current = _read_env_proxy_port()
+    if current and _port_open(current) and _proxy_can_reach_web(current):
+        url = f"http://host.docker.internal:{current}"
+        os.environ["HOST_PROXY"] = url
+        return current, f"代理 {current} 可用"
+
+    port = auto_config_proxy()
+    if port:
+        os.environ["HOST_PROXY"] = f"http://host.docker.internal:{port}"
+        if current and current != port:
+            return port, f"原代理 {current} 不可用，已自动切换为 {port}"
+        return port, f"已自动检测并配置代理 {port}"
+
+    os.environ["HOST_PROXY"] = ""
+    return None, "未检测到可用翻墙代理（A股/ETF 数据不受影响，美股数据源可能超时）"
+
 # 内置常见 A 股/ETF 代码 -> 公司简称（补充：从报告正文自动学习 + 手动扩充）
 BUILTIN_COMPANY_NAMES = {
     # 宽基/热门 ETF
@@ -637,32 +678,13 @@ def _enqueue_scheduled_analysis(ticker: str, cfg: dict):
 def _schedule_worker():
     """调度工作线程：串行消费队列，一个标的跑完再跑下一个。
 
-    每次取到新任务、真正开始执行前，先自动检测一次当前可用的代理端口并
-    写回 .env（VPN 端口每次重连都会变，不能写死），确保本批分析走最新代理。
+    代理检测统一由 ``run_analysis`` 在每次发起前完成（手动/定时同一条路），
+    这里只管串行调度，避免同一批任务重复探测两次。
     """
     while True:
         try:
             ticker, date, analysts, task_id = _schedule_queue.get()
             try:
-                # 每次开始一个新标的前，重新探测代理端口（VPN 重连会变端口）
-                try:
-                    port = auto_config_proxy()
-                    if port:
-                        with TASKS_LOCK:
-                            task = RUNNING_TASKS.get(task_id)
-                            if task:
-                                task["log_lines"].append(
-                                    f"[代理] 已自动检测到可用代理端口 {port}，写入 HOST_PROXY"
-                                )
-                    else:
-                        with TASKS_LOCK:
-                            task = RUNNING_TASKS.get(task_id)
-                            if task:
-                                task["log_lines"].append(
-                                    "[代理] 未检测到可用翻墙代理，美股数据源可能超时"
-                                )
-                except Exception as e:
-                    pass
                 with TASKS_LOCK:
                     task = RUNNING_TASKS.get(task_id)
                     if task:
@@ -860,15 +882,29 @@ def run_analysis(ticker, date, analysts, task_id):
     """在子线程中运行分析，实时收集日志"""
     with TASKS_LOCK:
         task = RUNNING_TASKS[task_id]
+
+    # 发起前先确认代理可用：VPN 重连后端口会变，用旧端口会一直超时。
+    # 这里不抛异常 —— 代理不可用时 A股/ETF 仍能跑，只是美股数据源会降级。
+    try:
+        port, msg = ensure_proxy()
+        with TASKS_LOCK:
+            task["log_lines"].append(f"[代理] {msg}")
+    except Exception as e:
+        with TASKS_LOCK:
+            task["log_lines"].append(f"[代理] 检测异常（继续执行）: {e}")
+
     # 注意：不加 --show（改为 --no-show），否则在无 TTY 环境下 Rich 分页器会挂起，
     # 导致容器永不退出、任务卡在 running。报告已通过 --save 保存到文件，前端直接读文件展示。
     cmd = ["docker", "compose", "run", "--rm", "tradingagents",
            "--ticker", ticker, "--date", date,
            "--analysts", analysts, "--save", "--html", "--no-show"]
+    # 显式传 HOST_PROXY：compose 的变量插值优先读进程环境，只改 .env 会被
+    # webapp 启动时的旧值覆盖，导致"检测到新端口但容器仍用旧端口"。
+    env = os.environ.copy()
     proc = subprocess.Popen(
         cmd, cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="ignore", bufsize=1,
-        shell=False,
+        shell=False, env=env,
     )
     task["proc"] = proc
     task["status"] = "running"
