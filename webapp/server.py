@@ -877,6 +877,12 @@ def list_report_stages(report_id):
 # 这里设 30 分钟上限，超时自动终止进程，避免前端永远"运行中"。
 ANALYSIS_TIMEOUT = 30 * 60
 
+# 并发上限：每个分析容器要吃掉数 GB 内存，同时开 4~5 个会把机器打到 OOM，
+# 容器被 SIGKILL（exit 137），日志戛然而止且没有任何报错——排查起来像"神秘失败"。
+# 这里用信号量限制同时运行的分析数，超出的排队等待。
+MAX_CONCURRENT_ANALYSES = int(os.getenv("TRADINGAGENTS_MAX_CONCURRENT", "2"))
+_RUN_SLOTS = threading.Semaphore(MAX_CONCURRENT_ANALYSES)
+
 
 def run_analysis(ticker, date, analysts, task_id):
     """在子线程中运行分析，实时收集日志"""
@@ -885,6 +891,11 @@ def run_analysis(ticker, date, analysts, task_id):
 
     # 发起前先确认代理可用：VPN 重连后端口会变，用旧端口会一直超时。
     # 这里不抛异常 —— 代理不可用时 A股/ETF 仍能跑，只是美股数据源会降级。
+    with TASKS_LOCK:
+        task["log_lines"].append(
+            f"[工作台] 等待空闲分析槽位（上限 {MAX_CONCURRENT_ANALYSES} 个并发，避免内存打爆）"
+        )
+    _RUN_SLOTS.acquire()
     try:
         port, msg = ensure_proxy()
         with TASKS_LOCK:
@@ -901,11 +912,15 @@ def run_analysis(ticker, date, analysts, task_id):
     # 显式传 HOST_PROXY：compose 的变量插值优先读进程环境，只改 .env 会被
     # webapp 启动时的旧值覆盖，导致"检测到新端口但容器仍用旧端口"。
     env = os.environ.copy()
-    proc = subprocess.Popen(
-        cmd, cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="ignore", bufsize=1,
-        shell=False, env=env,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="ignore", bufsize=1,
+            shell=False, env=env,
+        )
+    except Exception:
+        _RUN_SLOTS.release()
+        raise
     task["proc"] = proc
     task["status"] = "running"
     started = time.time()
@@ -956,6 +971,7 @@ def run_analysis(ticker, date, analysts, task_id):
         task["status"] = "done" if ok else "error"
     task["finished_at"] = time.time()
     _save_tasks_history()
+    _RUN_SLOTS.release()
 
 
 def _terminate_proc_tree(proc):
