@@ -20,6 +20,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
+    # 内存上限：防止容器内存失控拖垮整个 WSL 虚拟机（曾因此生成 123 GB 崩溃转储塞满 C 盘）。
+    # 需要更大内存时自行调高。mem_limit 为物理内存，memswap_limit 为内存+交换总量。
+    mem_limit: 8g
+    memswap_limit: 12g
     tty: true
     stdin_open: true
 
@@ -41,6 +45,8 @@ services:
       - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
     depends_on:
       - ollama
+    mem_limit: 8g
+    memswap_limit: 12g
     tty: true
     stdin_open: true
     profiles:
