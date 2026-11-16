@@ -136,6 +136,68 @@ TICKER_ALIASES: dict[str, tuple[str, ...]] = {
     "SOXX": ("费城半导体", "半导体指数", "SOX", "芯片股"),
 }
 
+
+# --- 行业/上下游相关度 -----------------------------------------------------
+# 一条讲"重卡销量下滑""DDR5 渗透加快""覆铜板涨价"的文章，即使没点名公司，
+# 对该标的也是有用的一手产业信息。只按公司别名过滤会把这类内容全部丢掉，
+# 所以再建一层"行业关键词"：命中即纳入，但标注为"行业/上下游相关（未点名公司）"，
+# 让分析师明白这是间接证据、不能当作公司层面的确认。
+INDUSTRY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "semi_equipment": ("半导体设备", "刻蚀", "薄膜沉积", "炉管", "清洗设备", "晶圆厂",
+                       "扩产", "资本开支", "设备招标", "国产替代"),
+    "memory_interface": ("内存接口", "DDR5", "DDR4", "服务器", "数据中心", "DRAM",
+                         "内存条", "模组", "CKD", "MRDIMM"),
+    "optical": ("光模块", "800G", "400G", "1.6T", "CPO", "硅光", "光通信", "光芯片", "EML"),
+    "ai_compute": ("AI 算力", "AI算力", "GPU", "加速卡", "数据中心", "资本开支", "推理",
+                   "训练", "HBM", "英伟达", "算力租赁"),
+    "heavy_truck": ("重卡", "重卡销量", "发动机", "工程机械", "天然气重卡", "国七",
+                    "排放标准", "基建", "物流", "发电机组", "大缸径", "船机", "叉车"),
+    "power_utility": ("水电", "来水", "电价", "电力", "发电量", "利用小时", "抽水蓄能"),
+    "bank": ("银行", "净息差", "息差", "信贷", "不良率", "存款", "贷款", "LPR"),
+    "brokerage": ("券商", "证券", "经纪", "两融", "投行", "IPO", "成交额"),
+    "cxo": ("CXO", "CRO", "CDMO", "创新药", "医药外包", "订单", "产能"),
+    "pcb_material": ("覆铜板", "CCL", "PCB", "高频高速", "树脂", "铜箔", "服务器板"),
+    "robotics": ("机器人", "人形机器人", "减速器", "伺服", "灵巧手", "执行器", "丝杠"),
+    "software": ("软件", "信创", "SaaS", "工业软件", "国产软件", "操作系统"),
+    "consumer_electronics": ("果链", "iPhone", "消费电子", "组装", "连接器", "精密制造"),
+    "glass_optical": ("玻璃基板", "面板", "光纤", "光缆", "显示"),
+    "storage": ("NAND", "DRAM", "HBM", "存储", "闪存", "SSD", "颗粒", "涨价", "库存"),
+    "semiconductor": ("半导体", "芯片", "晶圆", "制程", "先进封装", "CoWoS", "集成电路"),
+}
+
+TICKER_INDUSTRY: dict[str, tuple[str, ...]] = {
+    "002371": ("semi_equipment", "semiconductor"),
+    "002475": ("consumer_electronics", "optical"),
+    "159530": ("robotics",),
+    "159852": ("software",),
+    "300308": ("optical", "ai_compute"),
+    "588170": ("semiconductor", "semi_equipment"),
+    "600999": ("brokerage",),
+    "601939": ("bank",),
+    "603186": ("pcb_material", "semiconductor"),
+    "603259": ("cxo",),
+    "688008": ("memory_interface", "ai_compute", "semiconductor"),
+    "603986": ("storage", "semiconductor"),
+    "688102": ("semi_equipment",),
+    "002415": ("robotics", "semiconductor"),
+    "300750": ("storage",),
+    "600519": ("consumer_electronics",),
+    "600900": ("power_utility",),
+    "000338": ("heavy_truck", "ai_compute"),
+    "AAPL": ("consumer_electronics",),
+    "AMD": ("ai_compute", "semiconductor"),
+    "GLW": ("glass_optical", "optical"),
+    "INTC": ("semiconductor", "ai_compute"),
+    "LITE": ("optical",),
+    "META": ("ai_compute",),
+    "MRVL": ("ai_compute", "optical", "semiconductor"),
+    "MU": ("storage", "ai_compute"),
+    "NVDA": ("ai_compute", "semiconductor"),
+    "SKHY": ("storage", "ai_compute"),
+    "SNDK": ("storage",),
+    "SOXX": ("semiconductor",),
+}
+
 _MAX_ITEMS = 18          # total items injected
 _MAX_PER_SECTION = 6     # per bucket, so one theme cannot dominate
 
@@ -214,6 +276,23 @@ def _alias_hits(item: dict, aliases: tuple[str, ...]) -> int:
     return n
 
 
+def _industry_hits(item: dict, ticker: str) -> int:
+    """How many of the ticker's *industry* keywords appear in this item."""
+    groups = TICKER_INDUSTRY.get((ticker or "").strip().upper(), TICKER_INDUSTRY.get(ticker, ()))
+    if not groups:
+        return 0
+    title = (item.get("title") or "")
+    text = (item.get("text") or "")
+    n = 0
+    for g in groups:
+        for w in INDUSTRY_KEYWORDS.get(g, ()):
+            if w in title:
+                n += 2
+            elif w in text:
+                n += 1
+    return n
+
+
 def _bucket(item: dict, aliases: tuple[str, ...]) -> str:
     """Best-fit section for an item (title hits first, then body hits)."""
     title = item.get("title") or ""
@@ -234,13 +313,13 @@ def _trend_flags(text: str) -> list[str]:
     return [w for w in TREND_WORDS if w in (text or "")]
 
 
-def _fmt_item(item: dict) -> str:
+def _fmt_item(item: dict, tag: str = "") -> str:
     published = (item.get("published") or "")[:10] or "日期未知"
     source = item.get("source") or "ima"
     title = (item.get("title") or "").strip()
     body = re.sub(r"\s+", " ", item.get("text") or "").strip()
     flags = _trend_flags(title + " " + body[:400])
-    head = f"- [{published}] {title}（{source}）"
+    head = f"- [{published}] {title}（{source}）{tag}"
     if flags:
         head += "  ⚑趋势信号: " + "/".join(flags[:4])
     excerpt = body[:260] + ("…" if len(body) > 260 else "")
@@ -298,12 +377,17 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
     # 产品/产业链关键词）；一条都不命中时，最多给 3 条宏观背景，并明确说明
     # "库里没有该产业链的直接语料"，让分析师据此判断数据缺口而不是被误导。
     direct = [(it, sc) for it, sc in kept if _alias_hits(it, aliases) > 0]
+    industry = [
+        (it, sc) for it, sc in kept
+        if _alias_hits(it, aliases) == 0 and _industry_hits(it, ticker) > 0
+    ][:6]
     macro_only = [
         (it, sc) for it, sc in kept
-        if _alias_hits(it, aliases) == 0 and _bucket(it, aliases) == "宏观与政策"
+        if _alias_hits(it, aliases) == 0 and _industry_hits(it, ticker) == 0
+        and _bucket(it, aliases) == "宏观与政策"
     ][:3]
 
-    if not direct and not macro_only:
+    if not direct and not industry and not macro_only:
         return (
             f"# ima 知识库情报 brief — {ticker}\n\n"
             f"**无相关语料**：库内已同步 {len(items)} 条，但没有一条涉及 {ticker} "
@@ -313,7 +397,8 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
             "若要补齐，可把该产业链的公众号文章推送进 ima 后重新同步。"
         )
 
-    kept = direct + macro_only
+    kept = direct + industry + macro_only
+    industry_ids = {id(it) for it, _ in industry}
 
     buckets: dict[str, list[dict]] = {}
     for it, _ in kept:
@@ -322,14 +407,21 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
     lines = [f"# ima 知识库情报 brief — {ticker}", ""]
     lines.append(
         f"来源：用户 ima 个人知识库（财联社/芯榜/芯智讯/半导体行业观察/梓豪谈芯/36氪/研报）。"
-        f"已同步 {len(items)} 条，本次命中 {len(kept)} 条（直接相关 {len(direct)} 条，已按标题去重）。"
+        f"已同步 {len(items)} 条，本次命中 {len(kept)} 条"
+        f"（公司直接相关 {len(direct)} 条 / 行业与上下游 {len(industry)} 条 / 宏观背景 {len(macro_only)} 条，"
+        f"已按标题去重）。"
     )
     if as_of_date:
         lines.append(f"时点约束：只使用 {as_of_date} 及之前发布的内容。")
-    if not direct:
+    if not direct and industry:
         lines.append(
-            "> ⚠️ 库内没有与该标的产业链**直接相关**的语料，下面只是宏观背景。"
-            "不要把半导体/其他行业的供需结论外推到本标的；请把行业细节记为数据缺口。"
+            "> 库内没有点名该公司的语料，但有**同产业链**内容（已标注〔行业/上下游相关〕）。"
+            "可据此判断供给、需求、价格与产能方向，但不要把行业结论直接当成公司层面的确认。"
+        )
+    elif not direct and not industry:
+        lines.append(
+            "> ⚠️ 库内既没有点名该公司的语料，也没有其产业链内容，下面只是宏观背景。"
+            "请把行业细节记为数据缺口，不要外推。"
         )
     lines.append("")
 
@@ -339,7 +431,9 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
             continue
         lines.append(f"## {section}（{len(group)} 条）")
         for it in group[:_MAX_PER_SECTION]:
-            lines.append(_fmt_item(it))
+            tag = ("〔行业/上下游相关，未点名公司〕"
+                   if id(it) in industry_ids and section != "宏观与政策" else "")
+            lines.append(_fmt_item(it, tag))
         lines.append("")
 
     # Explicit trend read: the user asked to watch for change, not levels.
