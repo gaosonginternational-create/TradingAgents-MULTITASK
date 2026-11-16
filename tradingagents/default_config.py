@@ -182,7 +182,10 @@ def build_default_config() -> dict:
         # while non-US tickers get their regional index automatically.
         # Trading days from the first close after the analysis date over which a
         # decision's outcome is measured, for reflection and for the backtest figures.
-        "holding_period_days": 20,
+        # 5 (≈ one week) so a decision is settled quickly enough to be fed back into
+        # the next run's past-context: at 20 the system only ever learned from
+        # month-old calls, which is too slow to correct a wrong driver.
+        "holding_period_days": 5,
         "benchmark_ticker": None,
         "benchmark_map": {
             ".NS":  "^NSEI",       # NSE India (Nifty 50)
