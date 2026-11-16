@@ -26,6 +26,9 @@ import re
 import sys
 from datetime import datetime
 
+# 允许直接 `python tools/ima_sync.py`：把仓库根加进 sys.path，才能 import tradingagents
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 _CN_DATE = re.compile(r"发布时间[:：]\s*(\d{4})年(\d{1,2})月(\d{1,2})日")
 _ISO_DATE = re.compile(r"(20\d{2})-(\d{2})-(\d{2})")
 
