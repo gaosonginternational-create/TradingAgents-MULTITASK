@@ -66,8 +66,14 @@ _PROXY_CANDIDATE_PORTS = [
 # 历史上实际出现过的端口（用户 VPN 曾用过），优先探测
 _HISTORICAL_PROXY_PORTS = [10793, 62274, 57817, 56044, 60793]
 
-# 探测代理是否真的能翻墙的测试地址（Google 返回 302/200 即认为可用）
-_PROXY_TEST_URL = "https://www.google.com/generate_204"
+# 探测代理是否真的能翻墙的测试地址。只测 Google 会误判：Google 可能被单独阻断
+# 而代理本身完全正常（曾因此把好代理判成"没有代理"）。任一站点通即视为可用。
+_PROXY_TEST_URLS = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5d",
+    "https://github.com",
+    "https://www.google.com/generate_204",
+)
+_PROXY_TEST_URL = _PROXY_TEST_URLS[0]
 _PROXY_TEST_TIMEOUT = 5
 
 
@@ -89,28 +95,68 @@ def _proxy_can_reach_web(port: int) -> bool:
         "https": f"http://127.0.0.1:{port}",
     })
     opener = urllib.request.build_opener(proxy)
+    for target in _PROXY_TEST_URLS:
+        try:
+            resp = opener.open(target, timeout=_PROXY_TEST_TIMEOUT)
+            if resp.getcode() in (200, 204, 302, 301, 403, 429):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _listening_ports() -> list[int]:
+    """本机所有处于 LISTENING 的 TCP 端口。
+
+    VPN 客户端切模式（代理模式/TUN 全局模式）或重连后，端口可能不在写死的候选表里，
+    甚至根本不存在（TUN 模式没有本地代理端口）。用 netstat 枚举真实监听端口来兜底，
+    比猜端口靠谱。
+    """
+    import subprocess
+
+    ports: set[int] = set()
     try:
-        # generate_204 返回 204 无内容，连接成功即可；302/200 也视为可用
-        resp = opener.open(_PROXY_TEST_URL, timeout=_PROXY_TEST_TIMEOUT)
-        code = resp.getcode()
-        return code in (200, 204, 302, 301, 403, 429)
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="ignore",
+        ).stdout
     except Exception:
-        return False
+        return []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and "LISTENING" in parts[-2:]:
+            addr = parts[1]
+            port = addr.rsplit(":", 1)[-1]
+            if port.isdigit():
+                ports.add(int(port))
+    # 排除系统端口与 webapp 自己，剩下的才可能是代理
+    return sorted(p for p in ports if p > 1024 and p != 8765)
 
 
 def detect_proxy_port() -> int | None:
     """探测当前可用的翻墙代理端口，返回端口号；找不到返回 None。
 
-    优先级：历史出现过的端口 > 常见默认端口。
+    先用已知端口（历史 + 常见默认）快速判断；全都不通时，再枚举本机所有监听端口
+    逐个试——这样 VPN 换到任意端口都能被发现。
     """
     candidates = list(_HISTORICAL_PROXY_PORTS)
     candidates += [p for p in _PROXY_CANDIDATE_PORTS if p not in candidates]
-    # 去重
     seen = set()
     ordered = [p for p in candidates if not (p in seen or seen.add(p))]
     for port in ordered:
         if not _port_open(port):
             continue
+        if _proxy_can_reach_web(port):
+            return port
+
+    # 兜底：扫描所有监听端口（排除已知失败的）。用总时限兜住耗时——
+    # TUN/全局模式下本就没有代理端口，不能因此让每次发起分析都卡上一两分钟。
+    deadline = time.time() + 12.0
+    unknown = [p for p in _listening_ports() if p not in seen]
+    for port in unknown:
+        if time.time() > deadline:
+            break
         if _proxy_can_reach_web(port):
             return port
     return None

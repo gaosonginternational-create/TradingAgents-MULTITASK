@@ -21,8 +21,16 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-# A no-content endpoint: connection success is all we need.
-_PROXY_TEST_URL = "https://www.google.com/generate_204"
+# Health check targets, most-relevant first. A single Google probe is a bad
+# signal: it can fail while the proxy is perfectly healthy (routing rules,
+# regional blocks), which looks exactly like "proxy down". Any one of these
+# answering proves the proxy forwards traffic.
+_PROXY_TEST_URLS = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5d",
+    "https://github.com",
+    "https://www.google.com/generate_204",
+)
+_PROXY_TEST_URL = _PROXY_TEST_URLS[0]
 _TEST_TIMEOUT = 4.0
 _PORT_TIMEOUT = 0.4
 
@@ -95,13 +103,35 @@ def proxy_works(url: str, timeout: float = _TEST_TIMEOUT) -> bool:
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": url, "https": url})
     )
-    try:
-        with opener.open(_PROXY_TEST_URL, timeout=timeout) as resp:
-            # 204 is the expected reply; a 403/429 still proves the proxy
-            # forwarded the request (some exit IPs are blocked, not broken).
-            return resp.getcode() in (200, 204, 301, 302, 403, 429)
-    except Exception:  # noqa: BLE001 - any failure means "not usable"
-        return False
+    for target in _PROXY_TEST_URLS:
+        try:
+            with opener.open(target, timeout=timeout) as resp:
+                # 204 is the expected reply; a 403/429 still proves the proxy
+                # forwarded the request (some exit IPs are blocked, not broken).
+                if resp.getcode() in (200, 204, 301, 302, 403, 429):
+                    return True
+        except Exception:  # noqa: BLE001 - try the next target
+            continue
+    return False
+
+
+def direct_works(timeout: float = _TEST_TIMEOUT) -> bool:
+    """Whether the container can reach the internet with no proxy at all.
+
+    A VPN in TUN / global mode has **no local proxy port** — traffic leaves
+    through a virtual adapter instead. In that mode "no proxy found" is the
+    correct, working state, and telling the user "no proxy" would be misleading.
+    An empty ProxyHandler disables any inherited proxy env for this check.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for url in _PROXY_TEST_URLS:
+        try:
+            with opener.open(url, timeout=timeout) as resp:
+                if resp.getcode() < 500:
+                    return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def _candidate_urls(preferred_host: str | None) -> list[str]:
@@ -153,11 +183,19 @@ def ensure_proxy(log=None) -> str | None:
                     emit(f"[代理] 已自动检测到可用代理 {url}")
                 return url
 
+        # 已知端口都不通时，先别急着报"没有代理"：TUN/全局模式下本来就没有
+        # 本地代理端口，此时直连就是正确状态。直连可用就直接用，省掉慢扫描。
         _apply_proxy(None)
-        msg = (
-            "[代理] 未找到可用代理：A股/ETF 数据不受影响，"
-            "美股数据源（Yahoo/Reddit/StockTwits）可能失败"
-        )
+        if direct_works():
+            msg = (
+                "[代理] 未发现本地代理端口，改走直连（VPN 为 TUN/全局模式）——"
+                "直连可用，美股数据源正常"
+            )
+        else:
+            msg = (
+                "[代理] 未找到可用代理，直连也不通：A股/ETF 数据仍可尝试，"
+                "美股数据源（Yahoo/Reddit/StockTwits）预计失败"
+            )
         emit(msg)
         logger.warning(msg)
         return None
