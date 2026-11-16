@@ -102,23 +102,38 @@ TREND_WORDS = (
 # Ticker -> the names/keywords a relevant article is likely to use. Kept small
 # and explicit: a wrong alias pulls in noise, which is worse than a miss.
 TICKER_ALIASES: dict[str, tuple[str, ...]] = {
-    "002371": ("北方华创", "Naura", "刻蚀", "薄膜沉积", "炉管", "清洗设备", "半导体设备"),
-    "002475": ("立讯精密", "立讯", "连接器", "AirPods", "组装", "果链", "铜缆"),
+    # --- A 股 / ETF ---
+    "002371": ("北方华创", "Naura", "半导体设备", "刻蚀", "薄膜沉积", "炉管", "清洗设备"),
+    "002475": ("立讯精密", "立讯", "连接器", "果链", "AirPods", "铜缆", "组装"),
+    "159530": ("机器人", "人形机器人", "人形", "减速器", "伺服", "灵巧手", "执行器"),
+    "159852": ("软件", "信创", "SaaS", "国产软件", "工业软件"),
     "300308": ("中际旭创", "旭创", "光模块", "800G", "1.6T", "CPO", "硅光"),
+    "588170": ("半导体", "芯片", "晶圆", "先进制程", "科创板", "集成电路"),
+    "600999": ("招商证券", "券商", "证券", "经纪", "两融", "投行"),
+    "601939": ("建设银行", "建行", "银行", "净息差", "息差", "不良率"),
+    "603186": ("华正新材", "覆铜板", "CCL", "高频高速", "树脂", "PCB"),
+    "603259": ("药明康德", "药明", "CXO", "CRO", "CDMO"),
     "688008": ("澜起科技", "澜起", "内存接口", "DDR5", "MRCD", "MDB", "CKD", "PCIe Retimer"),
-    "688102": ("斯瑞新材", "斯瑞", "铜合金", "触头", "CT球管", "轨交"),
-    "688981": ("中芯国际", "SMIC", "晶圆代工"),
-    "688012": ("中微公司", "中微", "刻蚀设备"),
-    "603259": ("药明康德", "WuXi", "CXO", "CRO", "CDMO"),
     "603986": ("兆易创新", "兆易", "NOR Flash", "MCU", "存储"),
+    "688102": ("斯瑞新材", "斯瑞", "铜合金", "触头", "CT球管", "轨交"),
     "002415": ("海康威视", "海康", "安防"),
     "300750": ("宁德时代", "宁德", "动力电池", "储能"),
-    "AMD": ("AMD", "MI300", "MI350", "Instinct", "EPYC", "苏姿丰", "Lisa Su"),
+    "600519": ("贵州茅台", "茅台", "白酒"),
+    "600900": ("长江电力", "水电", "来水", "三峡", "乌东德", "白鹤滩"),
+    "000338": ("潍柴动力", "潍柴", "重卡", "发动机", "发电机组", "大缸径", "KION", "叉车"),
+    # --- 美股 / 海外 ---
     "AAPL": ("苹果", "Apple", "iPhone", "果链"),
-    "NVDA": ("英伟达", "Nvidia", "黄仁勋", "GB200", "Blackwell", "GPU"),
-    "MU": ("美光", "Micron", "DRAM", "HBM"),
-    "MRVL": ("Marvell", "迈威尔", "定制芯片", "ASIC"),
+    "AMD": ("AMD", "Instinct", "EPYC", "MI350", "苏姿丰", "Lisa Su"),
     "GLW": ("康宁", "Corning", "光纤", "玻璃基板"),
+    "INTC": ("英特尔", "Intel", "至强", "18A", "代工"),
+    "LITE": ("Lumentum", "光模块", "光通信", "VCSEL", "EML"),
+    "META": ("Meta", "广告", "资本开支", "元宇宙", "AI 基建"),
+    "MRVL": ("Marvell", "迈威尔", "定制芯片", "ASIC", "光DSP"),
+    "MU": ("美光", "Micron", "DRAM", "NAND", "HBM"),
+    "NVDA": ("英伟达", "Nvidia", "黄仁勋", "Blackwell", "GB200", "GPU"),
+    "SKHY": ("SK海力士", "海力士", "HBM", "DRAM", "存储"),
+    "SNDK": ("闪迪", "SanDisk", "NAND", "SSD", "存储"),
+    "SOXX": ("费城半导体", "半导体指数", "SOX", "芯片股"),
 }
 
 _MAX_ITEMS = 18          # total items injected
@@ -185,6 +200,18 @@ def _score(item: dict, aliases: tuple[str, ...], as_of: str | None) -> float:
         else:
             score -= 20.0  # never leak post-analysis-date text into a backtest
     return score
+
+
+def _alias_hits(item: dict, aliases: tuple[str, ...]) -> int:
+    """How many of the ticker's aliases appear in this item's title or body."""
+    title = (item.get("title") or "").lower()
+    text = (item.get("text") or "").lower()
+    n = 0
+    for a in aliases:
+        low = a.lower()
+        if low and (low in title or low in text):
+            n += 1
+    return n
 
 
 def _bucket(item: dict, aliases: tuple[str, ...]) -> str:
@@ -265,6 +292,29 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
             f"ima 知识库中没有与 {ticker} 相关的内容（已同步 {len(items)} 条，但无命中）",
         )
 
+    # 相关性硬门槛。只按板块词表匹配会让"任何半导体新闻"都算得上相关——
+    # 000338（潍柴/重卡）会被塞进 7 条光刻胶、3D DRAM 的稿子，分析师只能
+    # 自己声明"与本标的无关"，白耗上下文。这里要求命中该标的的别名（公司名/
+    # 产品/产业链关键词）；一条都不命中时，最多给 3 条宏观背景，并明确说明
+    # "库里没有该产业链的直接语料"，让分析师据此判断数据缺口而不是被误导。
+    direct = [(it, sc) for it, sc in kept if _alias_hits(it, aliases) > 0]
+    macro_only = [
+        (it, sc) for it, sc in kept
+        if _alias_hits(it, aliases) == 0 and _bucket(it, aliases) == "宏观与政策"
+    ][:3]
+
+    if not direct and not macro_only:
+        return (
+            f"# ima 知识库情报 brief — {ticker}\n\n"
+            f"**无相关语料**：库内已同步 {len(items)} 条，但没有一条涉及 {ticker} "
+            f"或其产业链（{('、'.join(aliases[:4]) or '未配置别名')}）。\n\n"
+            "这**不代表**该标的不存在消息，只说明 ima 里还没有相关内容。\n"
+            "请仅依据 get_news / 公告 / 研报等工具下结论，并把此项记为数据缺口；"
+            "若要补齐，可把该产业链的公众号文章推送进 ima 后重新同步。"
+        )
+
+    kept = direct + macro_only
+
     buckets: dict[str, list[dict]] = {}
     for it, _ in kept:
         buckets.setdefault(_bucket(it, aliases), []).append(it)
@@ -272,10 +322,15 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
     lines = [f"# ima 知识库情报 brief — {ticker}", ""]
     lines.append(
         f"来源：用户 ima 个人知识库（财联社/芯榜/芯智讯/半导体行业观察/梓豪谈芯/36氪/研报）。"
-        f"已同步 {len(items)} 条，本次命中 {len(kept)} 条（已按标题去重）。"
+        f"已同步 {len(items)} 条，本次命中 {len(kept)} 条（直接相关 {len(direct)} 条，已按标题去重）。"
     )
     if as_of_date:
         lines.append(f"时点约束：只使用 {as_of_date} 及之前发布的内容。")
+    if not direct:
+        lines.append(
+            "> ⚠️ 库内没有与该标的产业链**直接相关**的语料，下面只是宏观背景。"
+            "不要把半导体/其他行业的供需结论外推到本标的；请把行业细节记为数据缺口。"
+        )
     lines.append("")
 
     for section in ("公司自身", "上下游与供应链", "行业与周期", "宏观与政策", "其他"):
