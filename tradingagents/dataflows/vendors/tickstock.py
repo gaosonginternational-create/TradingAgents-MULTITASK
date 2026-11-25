@@ -189,3 +189,265 @@ def market_snapshot() -> list[dict]:
     payload = _get("/api/screener/market-snapshot", {})
     rows = payload if isinstance(payload, list) else (payload.get("rows") or [])
     return rows
+
+
+# ---------------------------------------------------------------------------
+# 预计算指标：直接读面板算好的值，不再用 OHLCV 重算
+# ---------------------------------------------------------------------------
+# 面板每根 bar 都带 60+ 个指标与信号位。重算一遍既浪费算力，又会因为窗口/
+# 复权口径不同而与面板（用户自己看的那个界面）对不上——分析师引用的数字必须
+# 和用户屏幕上一致，否则没法对话。
+# 只保留判趋势/找买点必需的一组：列太多会把上下文吃满，反而看不清。
+_INDICATOR_COLUMNS = (
+    ("close", "收盘"), ("change_pct", "涨跌幅%"),
+    ("ma5", "MA5"), ("ma20", "MA20"), ("ma60", "MA60"),
+    ("macd_dif", "DIF"), ("macd_dea", "DEA"), ("macd_hist", "MACD柱"),
+    ("rsi_14", "RSI14"), ("kdj_k", "K"), ("kdj_d", "D"),
+    ("boll_upper", "BOLL上"), ("boll_lower", "BOLL下"),
+    ("atr_14", "ATR14"), ("vol_ratio_5d", "量比"), ("turnover_rate", "换手%"),
+)
+
+# 信号位是布尔列，逐个打印会淹掉正文，只汇总"窗口内触发过哪些、最近一次是哪天"。
+_SIGNAL_COLUMNS = (
+    ("signal_ma_golden_5_20", "MA5上穿MA20(金叉)"),
+    ("signal_ma_dead_5_20", "MA5下穿MA20(死叉)"),
+    ("signal_ma_golden_20_60", "MA20上穿MA60(金叉)"),
+    ("signal_ma5_breakout", "突破MA5"), ("signal_ma5_breakdown", "跌破MA5"),
+    ("signal_ma10_breakout", "突破MA10"), ("signal_ma10_breakdown", "跌破MA10"),
+    ("signal_ma20_breakout", "突破MA20"), ("signal_ma20_breakdown", "跌破MA20"),
+    ("signal_macd_golden", "MACD金叉"), ("signal_macd_dead", "MACD死叉"),
+    ("signal_boll_breakout_upper", "突破BOLL上轨"), ("signal_boll_breakdown_lower", "跌破BOLL下轨"),
+    ("signal_n_day_high", "创N日新高"), ("signal_n_day_low", "创N日新低"),
+    ("signal_volume_surge", "放量"),
+    ("signal_limit_up", "涨停"), ("signal_limit_down", "跌停"),
+    ("signal_broken_limit_up", "炸板"),
+)
+
+
+def _pos_in_range(row: dict) -> float:
+    """Where the close sits inside its 60-day low..high, as 0-100."""
+    lo, hi, close = row.get("low_60d"), row.get("high_60d"), row.get("close")
+    try:
+        if lo is None or hi is None or close is None or hi <= lo:
+            return 50.0
+        return max(0.0, min(100.0, (close - lo) / (hi - lo) * 100))
+    except TypeError:
+        return 50.0
+
+
+def get_indicators(ticker: str, curr_date: str, look_back_days: int = 30) -> str:
+    """Panel-precomputed indicators + signals for the window ending ``curr_date``.
+
+    Returns a compact table of the latest ``look_back_days`` bars plus a summary
+    of which signal flags fired in the window. Values are the panel's own, so
+    they match what the user sees in the terminal.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    end = _dt.strptime(curr_date, "%Y-%m-%d")
+    start = end - _td(days=int(look_back_days) * 2 + 10)  # 自然日→交易日留余量
+    rows = _daily_rows(ticker, start.strftime("%Y-%m-%d"), curr_date)
+    rows = rows[-int(look_back_days):]
+    if not rows:
+        raise NoMarketDataError(ticker, ticker, f"no indicator rows up to {curr_date}")
+
+    name = rows[-1].get("name") or ticker
+    lines = [f"## {name}（{ticker}）面板预计算指标 — 截至 {rows[-1]['date']}"]
+    lines.append("")
+    header = "| 日期 | " + " | ".join(lbl for _, lbl in _INDICATOR_COLUMNS) + " |"
+    sep = "|---" * (len(_INDICATOR_COLUMNS) + 1) + "|"
+    lines.append(header)
+    lines.append(sep)
+    for r in rows:
+        cells = []
+        for key, _ in _INDICATOR_COLUMNS:
+            v = r.get(key)
+            if v is None:
+                cells.append("-")
+            elif isinstance(v, bool):
+                cells.append("是" if v else "否")
+            elif isinstance(v, (int, float)):
+                if key == "change_pct":
+                    cells.append(f"{v * 100:+.2f}")
+                elif key in ("volume", "amount"):
+                    cells.append(f"{v:,.0f}")
+                elif abs(v) >= 1000:
+                    cells.append(f"{v:,.0f}")
+                else:
+                    cells.append(f"{v:.2f}")
+            else:
+                cells.append(str(v))
+        lines.append(f"| {r['date'][5:]} | " + " | ".join(cells) + " |")
+    lines.append("")
+
+    # 窗口内触发过的信号（附最近一次日期与次数）
+    fired = []
+    for key, label in _SIGNAL_COLUMNS:
+        dates = [r["date"][5:] for r in rows if r.get(key) is True]
+        if dates:
+            fired.append(f"- **{label}**：{len(dates)} 次（最近 {dates[-1]}）")
+    if fired:
+        lines.append("### 窗口内触发的信号位")
+        lines.extend(fired)
+    else:
+        lines.append("### 窗口内触发的信号位")
+        lines.append("- 无（该窗口内未出现金叉/死叉/突破/放量/涨跌停等信号）")
+    lines.append("")
+    last = rows[-1]
+    lines.append(
+        f"**最新状态**：收盘 {last.get('close'):.2f}，涨跌幅 "
+        f"{(last.get('change_pct') or 0) * 100:+.2f}%，"
+        f"60 日区间 {last.get('low_60d'):.2f} ~ {last.get('high_60d'):.2f}"
+        f"（当前位于区间 {_pos_in_range(last):.0f}%），"
+        f"ATR14 {last.get('atr_14'):.2f}，连板 {last.get('consecutive_limit_ups')}。"
+    )
+    lines.append("")
+    lines.append("> 数值直接取自 Tick Stock Panel 的入库指标（与终端界面一致），非本地重算。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 全市场横截面：市场宽度 + 本标的分位 + 同业对比
+# ---------------------------------------------------------------------------
+# 面板一次调用就给全 A 5000+ 行的市值/成交/换手/量比，这让"横截面"变得很便宜。
+# 单标的纵向看技术面容易失真——同样一根阴线，在全市场普跌里是噪声，在普涨里
+# 是独立走弱。这一层就是给分析师一个"相对位置"的锚。
+
+# 同业映射：只收录我能确定代码的标的。宁可缺，不可写错——错误的同行会把
+# 相对强弱结论整个带偏。未收录的标的只做全市场分位，不做同业对比。
+PEER_MAP: dict[str, tuple[str, ...]] = {
+    "002371": ("688012", "688072", "688037", "300604"),   # 半导体设备
+    "002475": ("002241", "300433", "601138"),             # 消费电子/果链
+    "300308": ("300502", "002281", "600487"),             # 光模块/光通信
+    "688008": ("603986", "688123", "300661"),             # 存储接口/模拟芯片
+    "603259": ("300759", "002821", "603127"),             # CXO
+    "603186": ("600183", "002916", "300476"),             # 覆铜板/PCB
+    "600999": ("600030", "601688", "601211"),             # 券商
+    "601939": ("601398", "601288", "600036"),             # 银行
+    "600900": ("600886", "600025", "601985"),             # 电力
+    "000338": ("000951", "000425", "600031"),             # 重卡/工程机械
+}
+
+_PEER_GROUP_NAME = {
+    "002371": "半导体设备", "002475": "消费电子/果链", "300308": "光模块/光通信",
+    "688008": "存储接口/模拟芯片", "603259": "CXO", "603186": "覆铜板/PCB",
+    "600999": "券商", "601939": "银行", "600900": "电力", "000338": "重卡/工程机械",
+}
+
+_snapshot_cache: dict[str, object] = {}
+_SNAPSHOT_TTL = 60.0  # 盘中 1 分钟内复用，避免同一次分析里反复拉 5000 行
+
+
+def snapshot_cached() -> list[dict]:
+    """Whole-market snapshot, reused for ``_SNAPSHOT_TTL`` seconds."""
+    import time
+
+    now = time.time()
+    hit = _snapshot_cache.get("data")
+    if hit is not None and now - float(_snapshot_cache.get("ts") or 0) < _SNAPSHOT_TTL:
+        return hit  # type: ignore[return-value]
+    rows = market_snapshot()
+    _snapshot_cache["data"] = rows
+    _snapshot_cache["ts"] = now
+    return rows
+
+
+def _pct_rank(values: list[float], v: float) -> float:
+    """Percentage of ``values`` at or below ``v`` (0-100)."""
+    if not values:
+        return 0.0
+    below = sum(1 for x in values if x <= v)
+    return below / len(values) * 100
+
+
+def cross_section(ticker: str, as_of: str | None = None) -> str:
+    """Market breadth + the ticker's percentile + peer comparison."""
+    rows = snapshot_cached()
+    if not rows:
+        raise NoMarketDataError(ticker, ticker, "panel market snapshot is empty")
+
+    key = panel_symbol(ticker)
+    me = next((r for r in rows if r.get("symbol") == key), None)
+    if me is None:
+        raise NoMarketDataError(ticker, key, f"{key} is not in the panel's market snapshot")
+
+    chg = [r.get("change_pct") or 0.0 for r in rows]
+    ups = sum(1 for c in chg if c > 0)
+    downs = sum(1 for c in chg if c < 0)
+    flats = len(chg) - ups - downs
+    # 涨停/跌停按涨跌幅近似（A股 10%/20% 两档都有），宁可用阈值也不用状态位
+    limit_up = sum(1 for c in chg if c >= 0.095)
+    limit_down = sum(1 for c in chg if c <= -0.095)
+    big_up = sum(1 for c in chg if c >= 0.05)
+    big_down = sum(1 for c in chg if c <= -0.05)
+    total_amount = sum((r.get("amount") or 0) for r in rows) / 1e8
+    med = sorted(chg)[len(chg) // 2] * 100
+
+    lines = [f"## 全市场横截面 — {me.get('name') or ticker}（{key}）"]
+    if as_of:
+        lines.append(f"数据时点：{as_of}（panel snapshot 为最新交易日）")
+    lines.append("")
+    lines.append("### 一、市场宽度（情绪温度）")
+    lines.append(f"- 全市场 {len(rows)} 只：**上涨 {ups} / 下跌 {downs} / 平盘 {flats}**"
+                 f"（上涨占比 {ups / len(rows) * 100:.0f}%）")
+    lines.append(f"- 涨停 {limit_up} 家 / 跌停 {limit_down} 家；涨幅≥5% 共 {big_up} 家，跌幅≥5% 共 {big_down} 家")
+    lines.append(f"- 全市场成交额合计 **{total_amount:,.0f} 亿元**；个股涨跌幅中位数 **{med:+.2f}%**")
+    breadth = "普涨" if ups / len(rows) > 0.65 else "普跌" if downs / len(rows) > 0.65 else "结构分化"
+    lines.append(f"- 判定：**{breadth}**。单只个股的涨跌要放到这个背景里读——"
+                 f"{'普涨中的下跌更可能是独立走弱' if breadth == '普涨' else '普跌中的下跌多为系统性回撤' if breadth == '普跌' else '分化市里个股走势的独立信息量最大'}。")
+    lines.append("")
+
+    lines.append("### 二、本标的全市场分位")
+    lines.append("| 指标 | 本标的 | 全市场分位 | 含义 |")
+    lines.append("|---|---:|---:|---|")
+    checks = [
+        ("market_cap", "总市值", lambda v: f"{v / 1e8:,.0f} 亿", 1e8),
+        ("amount", "成交额", lambda v: f"{v / 1e8:,.2f} 亿", 1e8),
+        ("turnover_rate", "换手率", lambda v: f"{v:.2f}%", 1.0),
+        ("vol_ratio_5d", "量比(5日)", lambda v: f"{v:.2f}", 1.0),
+        ("change_pct", "涨跌幅", lambda v: f"{v * 100:+.2f}%", 1.0),
+    ]
+    for field, label, fmt, scale in checks:
+        v = me.get(field)
+        if v is None:
+            continue
+        vals = [r.get(field) for r in rows if isinstance(r.get(field), (int, float))]
+        rank = _pct_rank(vals, v)
+        level = "极高" if rank >= 90 else "偏高" if rank >= 70 else "偏低" if rank <= 30 else "中等"
+        lines.append(f"| {label} | {fmt(v)} | {rank:.0f}% | {level} |")
+    lines.append("")
+
+    peers = PEER_MAP.get((ticker or "").strip().upper()) or PEER_MAP.get(ticker)
+    if peers:
+        group = _PEER_GROUP_NAME.get((ticker or "").strip().upper(), "同业")
+        lines.append(f"### 三、同业对比（{group}）")
+        lines.append("| 标的 | 名称 | 收盘 | 涨跌幅 | 换手% | 量比 | 总市值(亿) |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        rows_peer = [me]
+        for p in peers:
+            sym = panel_symbol(p)
+            match = next((r for r in rows if r.get("symbol") == sym), None)
+            if match:
+                rows_peer.append(match)
+        for r in rows_peer:
+            mark = "**" if r is me else ""
+            lines.append(
+                f"| {mark}{r.get('symbol')}{mark} | {r.get('name') or '-'} | "
+                f"{(r.get('close') or 0):.2f} | {((r.get('change_pct') or 0) * 100):+.2f}% | "
+                f"{(r.get('turnover_rate') or 0):.2f} | {(r.get('vol_ratio_5d') or 0):.2f} | "
+                f"{((r.get('market_cap') or 0) / 1e8):,.0f} |"
+            )
+        if len(rows_peer) > 1:
+            by_chg = sorted(rows_peer, key=lambda r: r.get("change_pct") or 0, reverse=True)
+            pos = next(i for i, r in enumerate(by_chg) if r is me) + 1
+            by_to = sorted(rows_peer, key=lambda r: r.get("turnover_rate") or 0, reverse=True)
+            pos_to = next(i for i, r in enumerate(by_to) if r is me) + 1
+            lines.append("")
+            lines.append(f"- 同业 {len(rows_peer)} 只中：**涨跌幅排第 {pos}**，"
+                         f"**换手率排第 {pos_to}**。")
+    else:
+        lines.append("### 三、同业对比")
+        lines.append("- 未收录该标的的同业映射，本节跳过（仅做全市场分位）。")
+    lines.append("")
+    lines.append("> 数据来自 Tick Stock Panel 全市场快照（单次调用返回全 A），非逐只查询。")
+    return "\n".join(lines)

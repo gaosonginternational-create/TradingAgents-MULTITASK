@@ -503,3 +503,58 @@ def get_ima_knowledge(
         str: A formatted markdown brief from the ima corpus
     """
     return _safe_route("get_ima_knowledge", ticker, trade_date or None)
+
+@tool
+def get_panel_indicators(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, InjectedState("trade_date")] = "",
+    look_back_days: Annotated[int, "Number of recent bars to show (default 30)"] = 30,
+) -> str:
+    """
+    Read the user's Tick Stock Panel **precomputed** indicators for this
+    instrument: MA/EMA/MACD/KDJ/BOLL/ATR/RSI/momentum/turnover, plus its signal
+    flags (golden cross, breakout, volume surge, limit up/down...) summarised by
+    count and last occurrence inside the window.
+
+    Use this instead of recomputing indicators whenever the panel is available:
+    the numbers are the ones the user sees in their own terminal, so any figure
+    you quote is verifiable on their screen. If the panel is down the tool says
+    so — then fall back to get_indicators.
+
+    Returns:
+        str: A markdown table of recent bars plus a signal summary
+    """
+    try:
+        from tradingagents.dataflows.vendors.tickstock import get_indicators as _panel_ind
+
+        return _panel_ind(ticker, curr_date, int(look_back_days))
+    except Exception as exc:  # noqa: BLE001 - a data gap must not kill the node
+        return (f"DATA_UNAVAILABLE: Tick Stock Panel indicators unavailable for {ticker} "
+                f"({type(exc).__name__}: {exc}). Fall back to get_indicators.")
+
+
+@tool
+def get_market_cross_section(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Place this instrument in the context of the whole A-share market in one shot:
+    market breadth (advancers/decliners, limit-ups, total turnover, median move),
+    the ticker's percentile on market cap / turnover / volume ratio / change, and
+    a like-for-like peer table (same industry) with its rank among peers.
+
+    Use it to decide whether a move is idiosyncratic or systemic — a -3% day in a
+    broad selloff means something different from -3% in a rally — and to judge
+    relative strength against direct peers rather than against the index alone.
+
+    Returns:
+        str: A markdown cross-section report
+    """
+    try:
+        from tradingagents.dataflows.vendors.tickstock import cross_section as _panel_cs
+
+        return _panel_cs(ticker, curr_date or None)
+    except Exception as exc:  # noqa: BLE001
+        return (f"DATA_UNAVAILABLE: market cross-section unavailable for {ticker} "
+                f"({type(exc).__name__}: {exc}).")
