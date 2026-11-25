@@ -596,3 +596,36 @@ def get_factor_analysis(
     except Exception as exc:  # noqa: BLE001 - a factor gap must not kill the node
         return (f"DATA_UNAVAILABLE: factor analysis unavailable for {ticker} "
                 f"({type(exc).__name__}: {exc}). Proceed with the other tools.")
+
+@tool
+def get_capital_flow(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Money flow and long-term (national team) positioning for an A-share:
+
+      1. 当日资金流 — net inflow/outflow, its share of turnover, and the stock's
+         percentile among all A-shares (one whole-market snapshot);
+      2. 国家队 — 中央汇金 / 证金 / 社保 / 养老金 / 中金 holdings in the top-10
+         shareholders, with the change versus the prior reporting period;
+      3. 龙虎榜 — recent appearances and institutional net buying;
+      4. a price-vs-flow cross-check (price up + net outflow = distribution,
+         price down + net inflow = someone absorbing).
+
+    Use this to test whether a move is backed by real money. Then cross-validate
+    with **industry progress and key events**: money flow tells you *what* is
+    happening in the order book, the industry timeline tells you *why*. A net
+    outflow right after a price hike or a capacity announcement reads very
+    differently from one with no news at all.
+
+    Returns:
+        str: A markdown money-flow report
+    """
+    try:
+        from tradingagents.dataflows.vendors.capital_flow import capital_flow_report
+
+        return capital_flow_report(ticker, curr_date or None)
+    except Exception as exc:  # noqa: BLE001 - missing flow data must not kill the node
+        return (f"DATA_UNAVAILABLE: capital flow unavailable for {ticker} "
+                f"({type(exc).__name__}: {exc}). Proceed with price/volume and industry data.")
