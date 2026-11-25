@@ -463,8 +463,13 @@ def fetch_reddit_posts(
                 parts.extend(got)
         fetched = parts if parts else None
     if fetched is None:
-        hint = ("没有配置 OAuth 凭证" if not reddit_oauth_configured()
-                else "OAuth 授权失败，检查 client_id/secret")
+        # Reddit 自 2025 年末起关闭了自助建 app（Responsible Builder Policy，
+        # 2026-10-31 后不再受理新申请），prefs/apps 页面只会返回
+        # "Max clients have been reached"。所以#除非用户手里有历史遗留的
+        # client_id/secret（老应用被 grandfather 保留），否则这条路已经封死。
+        hint = ("未配置 OAuth 凭证；Reddit 已关闭自助应用注册，仅在拥有历史凭证时可用"
+                if not reddit_oauth_configured()
+                else "OAuth 授权失败，检查 client_id/secret 是否有效")
         return (f"<Reddit unavailable: 匿名访问被 Reddit 拒绝（403/429），{hint}；"
                 f"{label} 抓取失败。这是数据缺口，不代表没有讨论>")
 
