@@ -463,7 +463,10 @@ def fetch_reddit_posts(
                 parts.extend(got)
         fetched = parts if parts else None
     if fetched is None:
-        return f"<Reddit unavailable: fetch failed ({label}); this is not an absence of discussion>"
+        hint = ("没有配置 OAuth 凭证" if not reddit_oauth_configured()
+                else "OAuth 授权失败，检查 client_id/secret")
+        return (f"<Reddit unavailable: 匿名访问被 Reddit 拒绝（403/429），{hint}；"
+                f"{label} 抓取失败。这是数据缺口，不代表没有讨论>")
 
     window = bool(start_date and end_date)
     posts = _within_window(fetched, start_date, end_date)
