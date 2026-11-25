@@ -6,6 +6,9 @@ from tradingagents.dataflows.errors import (
     VendorNotConfiguredError,
     VendorUnavailableError,
 )
+from tradingagents.dataflows.vendors.tickstock import (
+    get_stock as get_tickstock_stock,
+)
 from tradingagents.dataflows.vendors.ima import (
     get_ima_knowledge as get_ima_knowledge,
 )
@@ -121,6 +124,7 @@ OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "tickstock": get_tickstock_stock,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
         "akshare": get_akshare_stock,

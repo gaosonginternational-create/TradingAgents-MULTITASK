@@ -161,7 +161,7 @@ def build_default_config() -> dict:
         # routed to vendors you didn't choose. For ordered fallback, list several,
         # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
         "data_vendors": {
-            "core_stock_apis": "akshare,yfinance",       # Options: alpha_vantage, yfinance, akshare
+            "core_stock_apis": "tickstock,akshare,yfinance",  # Options: tickstock, alpha_vantage, yfinance, akshare
             "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
             # Statements come from SEC EDGAR as filed (US filers), then Yahoo; the
         # overview and insider tools, which SEC EDGAR does not serve, from Yahoo.

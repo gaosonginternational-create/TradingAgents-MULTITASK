@@ -34,6 +34,18 @@ def _download_cn_ohlcv(canonical: str, start_str: str, end_str: str):
     """
     from tradingagents.dataflows.vendors.akshare.common import normalize_ak_symbol
 
+    # 本地 Tick Stock Panel 优先：用户自建的全 A 数据源，无接口限流、数据完整
+    # （含当日收盘），且不依赖 VPN/代理。面板没开或没有该标的时静默回落到 AkShare。
+    try:
+        from tradingagents.dataflows.vendors.tickstock import daily_frame
+
+        panel = daily_frame(canonical, start_str, end_str)
+        if panel is not None and not panel.empty:
+            logger.debug("load_ohlcv: %s served by Tick Stock Panel (%d rows)", canonical, len(panel))
+            return panel
+    except Exception as exc:  # noqa: BLE001 - any panel problem falls back to AkShare
+        logger.debug("Tick Stock Panel unavailable for %s (%s); using AkShare", canonical, exc)
+
     data = _cn_hist(canonical, start_str, end_str)
     if data is None or data.empty:
         return None
