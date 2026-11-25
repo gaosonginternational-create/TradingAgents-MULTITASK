@@ -527,6 +527,14 @@ def get_panel_indicators(
         str: A markdown table of recent bars plus a signal summary
     """
     try:
+        from tradingagents.dataflows.vendors.akshare.common import is_a_share, is_etf
+
+        if not (is_a_share(ticker) or is_etf(ticker)):
+            return (f"<不适用：{ticker} 不是 A 股/ETF，Tick Stock Panel 只覆盖 A 股。"
+                    "请改用 get_indicators（基于 yfinance 的本地计算）做技术面判断。>")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         from tradingagents.dataflows.vendors.tickstock import get_indicators as _panel_ind
 
         return _panel_ind(ticker, curr_date, int(look_back_days))
@@ -558,8 +566,15 @@ def get_market_cross_section(
 
         return _panel_cs(ticker, curr_date or None)
     except Exception as exc:  # noqa: BLE001
-        return (f"DATA_UNAVAILABLE: market cross-section unavailable for {ticker} "
-                f"({type(exc).__name__}: {exc}).")
+        # 面板只覆盖 A 股。非 A 股（美股/港股/韩股）改用 Yahoo 同业横截面，
+        # 否则这一类标的会彻底失去"这是个股独立走势还是板块共振"的判断依据。
+        try:
+            from tradingagents.dataflows.vendors.us_peers import cross_section as _us_cs
+
+            return _us_cs(ticker)
+        except Exception:  # noqa: BLE001
+            return (f"DATA_UNAVAILABLE: market cross-section unavailable for {ticker} "
+                    f"({type(exc).__name__}: {exc}).")
 
 @tool
 def get_factor_analysis(
@@ -589,6 +604,15 @@ def get_factor_analysis(
     Returns:
         str: A markdown factor report
     """
+    try:
+        from tradingagents.dataflows.vendors.akshare.common import is_a_share, is_etf
+
+        if not (is_a_share(ticker) or is_etf(ticker)):
+            return (f"<不适用：{ticker} 不是 A 股/ETF，面板的因子库与横截面分位只覆盖 A 股。"
+                    "美股请用 get_market_cross_section（会回落到 Yahoo 同业横截面）+ "
+                    "get_indicators，并说明因子层面缺少全市场分位。>")
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from tradingagents.dataflows.vendors.tickstock import factor_analysis as _fa
 
@@ -624,6 +648,15 @@ def get_capital_flow(
     Returns:
         str: A markdown money-flow report
     """
+    try:
+        from tradingagents.dataflows.vendors.akshare.common import is_a_share, is_etf
+
+        if not (is_a_share(ticker) or is_etf(ticker)):
+            return (f"<不适用：{ticker} 不是 A 股/ETF。资金流（同花顺口径）、国家队（宽基ETF申赎）"
+                    "与龙虎榜都只覆盖 A 股。美股请改用 StockTwits 的多空比与成交量变化判断"
+                    "资金动向，并明确说明缺少主力资金数据。>")
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from tradingagents.dataflows.vendors.capital_flow import capital_flow_report
 
