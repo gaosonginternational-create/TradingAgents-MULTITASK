@@ -607,8 +607,10 @@ def get_capital_flow(
 
       1. 当日资金流 — net inflow/outflow, its share of turnover, and the stock's
          percentile among all A-shares (one whole-market snapshot);
-      2. 国家队 — 中央汇金 / 证金 / 社保 / 养老金 / 中金 holdings in the top-10
-         shareholders, with the change versus the prior reporting period;
+      2. 国家队代理 — 头部宽基 ETF（沪深300 四只 + 上证50/中证500/中证1000/
+         科创50）的**份额变化换算成净申购额**，及近几日累计。ETF 只有一级市场
+         申赎才改份额，所以大跌日份额跳增是市场公认的托底观察窗口；但份额≠持仓，
+         套利/保险/公募也会申购，只能推断。季报十大股东另列，仅作归属基线；
       3. 龙虎榜 — recent appearances and institutional net buying;
       4. a price-vs-flow cross-check (price up + net outflow = distribution,
          price down + net inflow = someone absorbing).
