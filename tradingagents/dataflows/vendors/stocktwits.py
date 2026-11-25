@@ -20,6 +20,7 @@ import http.client
 import json
 import logging
 from datetime import datetime
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from tradingagents.dataflows.date_window import coverage_gap, in_window
@@ -99,6 +100,20 @@ def fetch_stocktwits_messages(
     try:
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
+    except HTTPError as exc:
+        # 403 不是我们的问题：StockTwits 已对所有匿名调用返回 Forbidden
+        # （实测换浏览器 UA、换标的、走不同出口 IP 都一样）。这不是临时故障，
+        # 反复重试只会刷日志，所以给一句明确说明并按"该源不可用"处理。
+        if exc.code in (401, 403):
+            logger.warning(
+                "StockTwits refused anonymous access (HTTP %s) for %s — the public "
+                "stream endpoint now requires an app token; skipping this source",
+                exc.code, ticker,
+            )
+            return ("<stocktwits unavailable: anonymous access refused (HTTP 403) — "
+                    "StockTwits now requires an API token; use Reddit/news for sentiment>")
+        logger.warning("StockTwits fetch failed for %s: HTTP %s", ticker, exc.code)
+        return f"<stocktwits unavailable: HTTP {exc.code}>"
     except (OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
         # OSError covers URLError/TimeoutError/connection resets; HTTPException
         # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).

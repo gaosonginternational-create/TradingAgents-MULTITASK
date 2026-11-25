@@ -205,6 +205,11 @@ _DEFAULT_UA = "tradingagents/0.2 (market sentiment research)"
 
 _token_cache: dict[str, float | str | None] = {"token": None, "expires_at": 0.0}
 
+# 匿名 RSS 已经等同于不可用（实测 403/404 交替，偶发 429 且 Retry-After 常达
+# 60 秒以上）。一旦本次进程确认它不可用就整轮跳过，否则每次分析都要为每个版块
+# 白等一分钟，三个版块就是三分钟——这会把整轮分析拖死。
+_RSS_DEAD = {"flag": False}
+
 
 def _user_agent() -> str:
     """A unique, descriptive UA (Reddit rejects generic ones)."""
@@ -348,6 +353,8 @@ def _fetch_subreddit_rss(
     failed fetch as "no posts found" hands the sentiment analyst an absence of
     discussion that was never observed (#1295).
     """
+    if _RSS_DEAD["flag"]:
+        return None
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
     try:
@@ -355,16 +362,20 @@ def _fetch_subreddit_rss(
             root = ET.fromstring(_read_capped(resp))
     except HTTPError as exc:
         if exc.code == 429 and _retry:
-            # Honour a server-supplied Retry-After exactly (including 0); jitter
-            # only our own fallback so concurrent runs don't retry in lockstep.
+            # Honour Retry-After but cap it: Reddit routinely asks for 60s+, and
+            # sleeping that long inside a tool call stalls the whole analysis.
             retry_after = _retry_after_seconds(exc)
-            wait = retry_after if retry_after is not None else _jitter(_RETRY_FALLBACK_SECONDS)
+            wait = min(retry_after if retry_after is not None else _jitter(_RETRY_FALLBACK_SECONDS), 5.0)
             logger.warning(
-                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once",
+                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once (capped)",
                 sub, ticker, wait,
             )
             time.sleep(wait)
             return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
+        if exc.code in (429, 404, 403, 401):
+            # 429 也算不可用：重试一次仍被限，说明这条 IP 已被 Reddit 判死，
+            # 剩下的版块没必要再各等一轮。
+            _RSS_DEAD["flag"] = True
         if exc.code in (401, 403):
             # Reddit stopped serving anonymous RSS to non-browser clients: the
             # old.reddit host now answers with a login wall and www 403s. This
@@ -373,7 +384,8 @@ def _fetch_subreddit_rss(
             # instead of looking like a crash.
             logger.warning(
                 "Reddit RSS blocked (HTTP %s) for r/%s · %s — Reddit no longer "
-                "serves anonymous RSS; continuing with the other sentiment sources",
+                "serves anonymous RSS (or answers 404/429); giving up on it for this run, "
+                "continuing with the other sentiment sources",
                 exc.code, sub, ticker,
             )
             return None
@@ -442,7 +454,14 @@ def fetch_reddit_posts(
     # fallback for when no app credentials are configured or the token is refused.
     fetched = _fetch_subreddit_oauth(ticker, combined, _FEED_PAGE, timeout)
     if fetched is None:
-        fetched = _fetch_subreddit_rss(ticker, combined, _FEED_PAGE, timeout)
+        # RSS 路径不支持多版块合并搜索：/r/a+b+c/search.rss 返回 404（只有
+        # 带 OAuth 的 JSON 搜索才支持 + 语法）。所以逐个版块查，再合并。
+        parts = []
+        for sub in subreddits:
+            got = _fetch_subreddit_rss(ticker, sub, _FEED_PAGE, timeout)
+            if got:
+                parts.extend(got)
+        fetched = parts if parts else None
     if fetched is None:
         return f"<Reddit unavailable: fetch failed ({label}); this is not an absence of discussion>"
 
