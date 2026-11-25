@@ -19,6 +19,7 @@ import html
 import http.client
 import json
 import logging
+import os
 from datetime import datetime
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -96,22 +97,31 @@ def fetch_stocktwits_messages(
     caller never has to special-case None or exceptions.
     """
     url = _API.format(ticker=_stocktwits_symbol(ticker))
-    req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
+    headers = {"User-Agent": _UA, "Accept": "application/json"}
+    # 可选：浏览器登录后导出的 Cookie（含 cf_clearance 与登录态）。
+    # Cloudflare 目前按出口 IP/WAF 直接拦，token 也过不去；只有"同一 IP + 同一 UA
+    # 下拿到的 cf_clearance"才可能放行，所以这里支持整串 Cookie 透传。
+    cookie = os.getenv("STOCKTWITS_COOKIE", "").strip()
+    if cookie:
+        headers["Cookie"] = cookie
+    req = Request(url, headers=headers)
     try:
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
     except HTTPError as exc:
-        # 403 不是我们的问题：StockTwits 已对所有匿名调用返回 Forbidden
-        # （实测换浏览器 UA、换标的、走不同出口 IP 都一样）。这不是临时故障，
-        # 反复重试只会刷日志，所以给一句明确说明并按"该源不可用"处理。
+        # 403 来自 Cloudflare 的 WAF，不是 StockTwits 的鉴权：响应头是
+        # ``Server: cloudflare`` + "Sorry, you have been blocked"，且带
+        # Authorization / access_token 也照样 403（认证环节根本没走到）。
+        # 唯一可能放行的是"同一出口 IP + 同一 UA 下取得的 cf_clearance"。
+        # 反复重试只会刷日志，直接按"该源被墙"处理。
         if exc.code in (401, 403):
             logger.warning(
-                "StockTwits refused anonymous access (HTTP %s) for %s — the public "
-                "stream endpoint now requires an app token; skipping this source",
+                "StockTwits blocked by Cloudflare (HTTP %s) for %s — WAF rejects this "
+                "exit IP; an API token does not help. Skipping this source.",
                 exc.code, ticker,
             )
-            return ("<stocktwits unavailable: anonymous access refused (HTTP 403) — "
-                    "StockTwits now requires an API token; use Reddit/news for sentiment>")
+            return ("<stocktwits unavailable: Cloudflare WAF blocked this exit IP (HTTP 403) — "
+                    "not an auth issue; switch network/exit node or supply STOCKTWITS_COOKIE>")
         logger.warning("StockTwits fetch failed for %s: HTTP %s", ticker, exc.code)
         return f"<stocktwits unavailable: HTTP {exc.code}>"
     except (OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
