@@ -484,6 +484,7 @@ def get_downstream_analysis(
 def get_ima_knowledge(
     ticker: Annotated[str, InjectedState("company_of_interest")],
     trade_date: Annotated[str, InjectedState("trade_date")] = "",
+    focus: Annotated[str, "Optional: 'industry' to keep only industry-chain and research-report items"] = "",
 ) -> str:
     """
     Retrieve the user's curated ima knowledge base (财联社 电报, 芯榜/芯智讯/
@@ -502,7 +503,8 @@ def get_ima_knowledge(
     Returns:
         str: A formatted markdown brief from the ima corpus
     """
-    return _safe_route("get_ima_knowledge", ticker, trade_date or None)
+    return _safe_route("get_ima_knowledge", ticker, trade_date or None,
+                       focus="industry" if (focus or "").strip().lower() == "industry" else None)
 
 @tool
 def get_panel_indicators(

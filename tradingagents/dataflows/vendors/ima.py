@@ -326,13 +326,23 @@ def _fmt_item(item: dict, tag: str = "") -> str:
     return head + (f"\n    {excerpt}" if excerpt else "")
 
 
-def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int = _MAX_ITEMS) -> str:
+def get_ima_knowledge(
+    ticker: str,
+    as_of_date: str | None = None,
+    *,
+    limit: int = _MAX_ITEMS,
+    focus: str | None = None,
+) -> str:
     """Render the synced ima corpus for ``ticker`` as an analyst brief.
 
     Returns a markdown block grouped into 公司自身 / 上下游与供应链 / 行业与周期 /
     宏观与政策, with trend words flagged and a 复盘 (prediction scorecard) section
     from the ledger. Raises NoMarketDataError when nothing has been synced so the
     analyst reports an honest gap instead of inventing coverage.
+
+    ``focus="industry"`` 是给市场分析师用的：只看**产业整体**那一层——行业与周期、
+    上下游与供应链，以及研报类来源（行业展望、产能与价格跟踪、季度策略）。这类
+    文字通常不点名个股，但正是判断"这波涨跌是行业景气还是个股故事"的依据。
     """
     items = load_store()
     if not items:
@@ -399,6 +409,28 @@ def get_ima_knowledge(ticker: str, as_of_date: str | None = None, *, limit: int 
 
     kept = direct + industry + macro_only
     industry_ids = {id(it) for it, _ in industry}
+
+    # focus="industry"：市场分析师要的是"产业整体"，不是公司公告。只留行业与周期、
+    # 上下游，以及研报类来源（行业展望/产能与价格跟踪/季度策略）——这些通常不点名
+    # 个股，但恰恰决定"这波涨跌是景气驱动还是个股故事"。
+    if focus == "industry":
+        pool = [
+            (it, sc) for it, sc in kept
+            if _bucket(it, aliases) in ("行业与周期", "上下游与供应链")
+            or "研报" in (it.get("source") or "")
+        ]
+        if not pool:
+            return (
+                f"# ima 产业情报 — {ticker}\n\n"
+                f"**无产业级语料**：库内已同步 {len(items)} 条，但没有一条属于行业与周期、"
+                "上下游或研报类内容。请以行情/技术面为主，并明确记为数据缺口；"
+                "把行业研报、月度跟踪、涨价/产能类文章推进 ima 后即可补齐。"
+            )
+        kept = pool[:limit]
+        direct = [(it, sc) for it, sc in kept if _alias_hits(it, aliases) > 0]
+        industry = [(it, sc) for it, sc in kept if _alias_hits(it, aliases) == 0]
+        macro_only = []
+        industry_ids = {id(it) for it, _ in industry}
 
     buckets: dict[str, list[dict]] = {}
     for it, _ in kept:
