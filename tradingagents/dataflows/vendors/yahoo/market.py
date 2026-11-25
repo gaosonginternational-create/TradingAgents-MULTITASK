@@ -264,8 +264,28 @@ def get_stockstats_indicator(
 
 
 def get_closes(symbol: str, start_date: str, end_date: str) -> pd.Series:
-    """Daily closes from ``start_date`` up to, not including, ``end_date``."""
+    """Daily closes from ``start_date`` up to, not including, ``end_date``.
+
+    A-share/HK symbols are served by the local Tick Stock Panel first: it holds
+    the whole A-share market, needs no network egress, and never rate-limits —
+    whereas Yahoo returns an empty frame for a bare 6-digit code (surfacing as
+    ``YFTzMissingError``) and is unreliable behind the VPN. Yahoo remains the
+    path for everything else (and as the fallback).
+    """
     canonical = normalize_symbol(symbol)
+    try:
+        from tradingagents.dataflows.vendors.akshare.common import is_a_share, is_etf
+
+        if is_a_share(symbol) or is_etf(symbol):
+            from tradingagents.dataflows.vendors.tickstock import daily_frame
+
+            df = daily_frame(symbol, start_date, end_date)
+            if df is not None and not df.empty:
+                series = pd.Series(df["Close"].to_numpy(), index=pd.to_datetime(df["Date"]))
+                return series[series.index < pd.to_datetime(end_date)]
+    except Exception as exc:  # noqa: BLE001 - panel down or symbol unsupported
+        logger.debug("panel closes unavailable for %s (%s); using Yahoo", symbol, exc)
+
     history = yf_retry(lambda: yf.Ticker(canonical).history(start=start_date, end=end_date))
     return history["Close"] if history is not None and "Close" in history else pd.Series(dtype=float)
 

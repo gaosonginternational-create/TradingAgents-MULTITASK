@@ -136,6 +136,17 @@ def normalize_symbol(raw: str) -> str:
         canonical = f"{int(hk.group(1)):04d}.HK"
     elif sh := _SHANGHAI_SH.match(s):
         canonical = f"{sh.group(1)}.SS"
+    elif len(s) == 6 and s.isdigit():
+        # 裸 6 位 A 股/ETF 代码：Yahoo 必须带交易所后缀，否则返回空数据并抛
+        # YFTzMissingError（"timezone missing" 其实就是没拿到任何行情）。
+        # 6→沪主板/科创，0/3→深主板/创业板，5→沪 ETF，1/2→深 ETF，4/8→北交所。
+        head = s[0]
+        if head == "6" or head == "5":
+            canonical = f"{s}.SS"
+        elif head in ("0", "3", "1", "2"):
+            canonical = f"{s}.SZ"
+        else:
+            canonical = s
     else:
         canonical = s
 
