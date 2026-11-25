@@ -558,3 +558,39 @@ def get_market_cross_section(
     except Exception as exc:  # noqa: BLE001
         return (f"DATA_UNAVAILABLE: market cross-section unavailable for {ticker} "
                 f"({type(exc).__name__}: {exc}).")
+
+@tool
+def get_factor_analysis(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Factor picture for this instrument from the user's Tick Stock Panel:
+
+      1. multi-horizon factor exposure (5/20/60-day momentum, MA20 bias, position
+         inside the 60-day range, ATR/price, annualised volatility);
+      2. cross-sectional percentiles — market-wide and against same-industry peers
+         — for the factors the whole-market snapshot carries (change, turnover,
+         volume ratio, market cap, turnover value), plus the industry median;
+      3. industry dispersion: is today's move stock-specific or industry beta,
+         and the stock's rank within its industry;
+      4. market regime: emotion score, limit-up/limit-down, seal rate, broken
+         boards, ladder height, share of stocks above MA20 — and which factor
+         style that environment favours;
+      5. what the panel's 991-factor library covers.
+
+    Use it when you need to say *why* a name is behaving this way in factor terms
+    (momentum vs value vs liquidity vs volatility), or whether its move is
+    idiosyncratic. Percentiles are the honest part: 90% means it exceeds 90% of
+    the market.
+
+    Returns:
+        str: A markdown factor report
+    """
+    try:
+        from tradingagents.dataflows.vendors.tickstock import factor_analysis as _fa
+
+        return _fa(ticker, curr_date or None)
+    except Exception as exc:  # noqa: BLE001 - a factor gap must not kill the node
+        return (f"DATA_UNAVAILABLE: factor analysis unavailable for {ticker} "
+                f"({type(exc).__name__}: {exc}). Proceed with the other tools.")

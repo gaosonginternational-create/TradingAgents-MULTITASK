@@ -417,18 +417,31 @@ def cross_section(ticker: str, as_of: str | None = None) -> str:
         lines.append(f"| {label} | {fmt(v)} | {rank:.0f}% | {level} |")
     lines.append("")
 
-    peers = PEER_MAP.get((ticker or "").strip().upper()) or PEER_MAP.get(ticker)
-    if peers:
-        group = _PEER_GROUP_NAME.get((ticker or "").strip().upper(), "同业")
+    # 同业优先用面板的同花顺行业（动态、覆盖全市场），取不到时才回落到手写的
+    # PEER_MAP。动态分组的好处是新增持仓不用维护映射表，且口径与用户终端一致。
+    ind_map = industry_map()
+    industry = ind_map.get(key, "")
+    dyn_peers = []
+    industry_all: list[dict] = []
+    if industry:
+        industry_all = [r for r in rows
+                        if r.get("symbol") != key and ind_map.get(r.get("symbol")) == industry]
+        dyn_peers = sorted(industry_all, key=lambda r: r.get("market_cap") or 0, reverse=True)[:5]
+    if dyn_peers or PEER_MAP.get((ticker or "").strip().upper()) or PEER_MAP.get(ticker):
+        static = PEER_MAP.get((ticker or "").strip().upper()) or PEER_MAP.get(ticker) or ()
+        group = industry or _PEER_GROUP_NAME.get((ticker or "").strip().upper(), "同业")
         lines.append(f"### 三、同业对比（{group}）")
         lines.append("| 标的 | 名称 | 收盘 | 涨跌幅 | 换手% | 量比 | 总市值(亿) |")
         lines.append("|---|---|---:|---:|---:|---:|---:|")
         rows_peer = [me]
-        for p in peers:
-            sym = panel_symbol(p)
-            match = next((r for r in rows if r.get("symbol") == sym), None)
-            if match:
-                rows_peer.append(match)
+        if dyn_peers:
+            rows_peer.extend(dyn_peers)
+        else:
+            for p in static:
+                sym = panel_symbol(p)
+                match = next((r for r in rows if r.get("symbol") == sym), None)
+                if match:
+                    rows_peer.append(match)
         for r in rows_peer:
             mark = "**" if r is me else ""
             lines.append(
@@ -437,17 +450,216 @@ def cross_section(ticker: str, as_of: str | None = None) -> str:
                 f"{(r.get('turnover_rate') or 0):.2f} | {(r.get('vol_ratio_5d') or 0):.2f} | "
                 f"{((r.get('market_cap') or 0) / 1e8):,.0f} |"
             )
-        if len(rows_peer) > 1:
-            by_chg = sorted(rows_peer, key=lambda r: r.get("change_pct") or 0, reverse=True)
+        # 排名按**整个行业**算，而不是只按表里展示的那几只——展示的是市值最大的
+        # 可比公司，用它们算排名会高估相对强弱。
+        rank_pool = [me] + (industry_all if industry_all else rows_peer[1:])
+        if len(rank_pool) > 1:
+            by_chg = sorted(rank_pool, key=lambda r: r.get("change_pct") or 0, reverse=True)
             pos = next(i for i, r in enumerate(by_chg) if r is me) + 1
-            by_to = sorted(rows_peer, key=lambda r: r.get("turnover_rate") or 0, reverse=True)
+            by_to = sorted(rank_pool, key=lambda r: r.get("turnover_rate") or 0, reverse=True)
             pos_to = next(i for i, r in enumerate(by_to) if r is me) + 1
             lines.append("")
-            lines.append(f"- 同业 {len(rows_peer)} 只中：**涨跌幅排第 {pos}**，"
+            lines.append(f"- 同业 {len(rank_pool)} 只中：**涨跌幅排第 {pos}**，"
                          f"**换手率排第 {pos_to}**。")
+        else:
+            lines.append("")
+            lines.append(f"- 同业 {len(rows_peer)} 只中：**涨跌幅排第 "
+                         f"{next(i for i, r in enumerate(sorted(rows_peer, key=lambda r: r.get('change_pct') or 0, reverse=True)) if r is me) + 1}**。")
     else:
         lines.append("### 三、同业对比")
         lines.append("- 未收录该标的的同业映射，本节跳过（仅做全市场分位）。")
     lines.append("")
     lines.append("> 数据来自 Tick Stock Panel 全市场快照（单次调用返回全 A），非逐只查询。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 因子分析：因子暴露 + 全市场/同业分位 + 市场状态
+# ---------------------------------------------------------------------------
+# 面板的因子库有 991 个（动量/波动/量价/财务/Barra/新闻情绪/分析师预期/Tick…），
+# 但 /api/backtest/factor/run 要载入全市场因子面板，单次 90 秒起步——放在分析
+# 流程里会把整轮拖死。所以这里走快路径：
+#   · 标的自身的多周期因子 → 面板日线（每根 bar 已带）
+#   · 横截面分位 → 全市场快照（一次 5000+ 行，60 秒缓存）
+#   · 同业分组 → ext-data 的同花顺行业（5582 只，10 分钟缓存）
+#   · 市场环境 → /api/regime/latest（情绪/封板/连板梯队）
+# 需要 991 因子里某一个的 IC/分组收益时，再单独跑回测接口，不放进自动流程。
+
+_industry_cache: dict[str, object] = {}
+_INDUSTRY_TTL = 600.0
+
+
+def industry_map(force: bool = False) -> dict[str, str]:
+    """symbol -> 同花顺行业（如 ``半导体-集成电路制造``），缓存 10 分钟。"""
+    import time
+
+    now = time.time()
+    hit = _industry_cache.get("data")
+    if hit is not None and not force and now - float(_industry_cache.get("ts") or 0) < _INDUSTRY_TTL:
+        return hit  # type: ignore[return-value]
+    try:
+        payload = _get("/api/ext-data/ext_hy_ths/rows", {"limit": 8000})
+        rows = payload if isinstance(payload, list) else (payload.get("rows") or [])
+        mapping = {}
+        for r in rows:
+            sym = r.get("symbol")
+            ind = r.get("所属同花顺行业")
+            if sym and ind:
+                mapping[sym] = ind
+        if mapping:
+            _industry_cache["data"] = mapping
+            _industry_cache["ts"] = now
+        return mapping
+    except Exception as exc:  # noqa: BLE001 - 行业数据缺失只影响同业对比
+        logger.debug("industry map unavailable: %s", exc)
+        return {}
+
+
+def regime_latest() -> dict:
+    """Panel's market-regime snapshot (emotion score, seal rate, ladders)."""
+    try:
+        payload = _get("/api/regime/latest", {})
+        return payload.get("row") or {} if isinstance(payload, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("regime unavailable: %s", exc)
+        return {}
+
+
+def _pct(values: list[float], v: float) -> float:
+    if not values:
+        return 0.0
+    return sum(1 for x in values if x <= v) / len(values) * 100
+
+
+def factor_analysis(ticker: str, as_of: str | None = None, look_back_days: int = 60) -> str:
+    """Factor exposure + cross-sectional percentiles + market regime."""
+    from datetime import datetime as _dt, timedelta as _td
+
+    rows = snapshot_cached()
+    if not rows:
+        raise NoMarketDataError(ticker, ticker, "panel market snapshot is empty")
+    key = panel_symbol(ticker)
+    me = next((r for r in rows if r.get("symbol") == key), None)
+    if me is None:
+        raise NoMarketDataError(ticker, key, f"{key} is not in the panel's market snapshot")
+
+    ind_map = industry_map()
+    industry = ind_map.get(key, "")
+    peers = [r for r in rows if industry and ind_map.get(r.get("symbol")) == industry]
+
+    lines = [f"## 因子分析 — {me.get('name') or ticker}（{key}）"]
+    if industry:
+        lines.append(f"同花顺行业：**{industry}**（同业 {len(peers)} 只）")
+    else:
+        lines.append("行业归属：未取到（ext-data 行业表不可用），同业对比降级为全市场。")
+    lines.append("")
+
+    # 一、多周期因子暴露（来自面板日线，每根 bar 自带）
+    end = _dt.strptime(as_of, "%Y-%m-%d") if as_of else _dt.today()
+    start = end - _td(days=look_back_days * 2 + 10)
+    try:
+        bars = _daily_rows(ticker, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        last = bars[-1] if bars else {}
+    except NoMarketDataError:
+        bars, last = [], {}
+
+    lines.append("### 一、多周期因子暴露（面板日线计算）")
+    lines.append("| 因子 | 取值 | 读法 |")
+    lines.append("|---|---:|---|")
+    exposure = [
+        ("5日动量", last.get("momentum_5d"), "短周期情绪，>0 表示近一周资金仍偏多"),
+        ("20日动量", last.get("momentum_20d"), "月度趋势，与 60 日同向说明趋势稳定"),
+        ("60日动量", last.get("momentum_60d"), "季度趋势，反向说明可能是反弹而非反转"),
+        ("MA20乖离", (last.get("close") / last["ma20"] - 1) if last.get("ma20") else None, ">8% 偏热易回抽，<-8% 偏冷易反抽"),
+        ("60日位置", _pos_in_range(last) if last else None, "0%=60日最低，100%=60日最高"),
+        ("ATR/价格", (last.get("atr_14") / last["close"]) if last.get("close") else None, "波动率，越高止损要越宽、仓位要越小"),
+        ("年化波动(20日)", last.get("annual_vol_20d"), "波动率因子，与市场分位对照看是否异常放大"),
+    ]
+    for label, v, note in exposure:
+        if v is None:
+            continue
+        if label == "60日位置":
+            lines.append(f"| {label} | {v:.0f}% | {note} |")
+        elif label in ("ATR/价格", "年化波动(20日)"):
+            lines.append(f"| {label} | {v * 100:.1f}% | {note} |")
+        else:
+            lines.append(f"| {label} | {v * 100:+.1f}% | {note} |")
+    lines.append("")
+
+    # 二、横截面分位（全市场 + 同业）——只有快照里有的因子能算全市场分位
+    lines.append("### 二、横截面分位（全市场 / 同业）")
+    lines.append("| 因子 | 本标的 | 全市场分位 | 同业中位数 | 同业分位 |")
+    lines.append("|---|---:|---:|---:|---:|")
+    cs_factors = [
+        ("change_pct", "当日涨跌幅", lambda v: f"{v * 100:+.2f}%"),
+        ("turnover_rate", "换手率(流动性)", lambda v: f"{v:.2f}%"),
+        ("vol_ratio_5d", "量比(量能)", lambda v: f"{v:.2f}"),
+        ("market_cap", "总市值(规模)", lambda v: f"{v / 1e8:,.0f}亿"),
+        ("amount", "成交额(流动性)", lambda v: f"{v / 1e8:,.2f}亿"),
+    ]
+    for field, label, fmt in cs_factors:
+        v = me.get(field)
+        if v is None:
+            continue
+        all_vals = [r.get(field) for r in rows if isinstance(r.get(field), (int, float))]
+        peer_vals = [r.get(field) for r in peers if isinstance(r.get(field), (int, float))]
+        med = sorted(peer_vals)[len(peer_vals) // 2] if peer_vals else None
+        lines.append(
+            f"| {label} | {fmt(v)} | {_pct(all_vals, v):.0f}% | "
+            f"{fmt(med) if med is not None else '-'} | "
+            f"{_pct(peer_vals, v):.0f}%" if peer_vals else
+            f"| {label} | {fmt(v)} | {_pct(all_vals, v):.0f}% | - | - |"
+        )
+    lines.append("")
+
+    # 三、同业分化度：这只票的涨跌有多少是行业共性
+    if peers and industry:
+        peer_chg = [r.get("change_pct") or 0.0 for r in peers]
+        peer_med = sorted(peer_chg)[len(peer_chg) // 2] * 100
+        mine = (me.get("change_pct") or 0.0) * 100
+        better = sum(1 for c in peer_chg if c * 100 > mine)
+        rank = better + 1
+        diff = mine - peer_med
+        lines.append("### 三、同业分化度")
+        lines.append(f"- 同业 {len(peers)} 只今日涨跌幅中位数 **{peer_med:+.2f}%**，本标的 **{mine:+.2f}%**，"
+                     f"{'强于' if diff >= 0 else '弱于'}同业中位数 **{abs(diff):.2f}pp**")
+        lines.append(f"- 同业排名：**{rank}/{len(peers)}**（1=最强，{len(peers)}=最弱）")
+        spread = (max(peer_chg) - min(peer_chg)) * 100
+        lines.append(f"- 行业内部离散度 {spread:.2f}pp —— "
+                     f"{'分化大，个股逻辑重于行业 beta' if spread > 6 else '分化小，跟随行业整体波动'}")
+        lines.append("")
+
+    # 四、市场环境
+    reg = regime_latest()
+    if reg:
+        lines.append("### 四、市场环境（面板 regime）")
+        lines.append(f"- 状态：**{reg.get('state')}**，情绪评分 **{reg.get('score')}**"
+                     f"（利润分 {reg.get('profit_score')} / 投机分 {reg.get('speculation_score')} / "
+                     f"韧性分 {reg.get('resilience_score')} / 趋势分 {reg.get('trend_score')}）")
+        lines.append(f"- 涨停 {reg.get('limit_up')} / 跌停 {reg.get('limit_down')}，"
+                     f"炸板 {reg.get('broken_limit')}，封板率 {(reg.get('seal_rate') or 0) * 100:.1f}%，"
+                     f"最高连板 {reg.get('max_consecutive')}，首板 {reg.get('first_board')}")
+        lines.append(f"- 上涨 {reg.get('up_count')} / 下跌 {reg.get('down_count')}，"
+                     f"站上 MA20 的占比 {(reg.get('above_ma20_pct') or 0) * 100:.1f}%，"
+                     f"成交额 {(reg.get('total_amount') or 0) / 1e8:,.0f} 亿")
+        seal = (reg.get("seal_rate") or 0) * 100
+        if seal >= 60:
+            style = "情绪偏热、追涨有效，动量/量能因子占优，但要注意高位分歧"
+        elif seal >= 35:
+            style = "情绪中性，量价与趋势因子有效性一般，重个股逻辑"
+        else:
+            style = "封板率低、炸板多，追高胜率差；低波动、低换手、有业绩支撑的因子更抗跌"
+        lines.append(f"- 因子风格倾向：**{style}**")
+        lines.append("")
+
+    lines.append("### 五、面板因子库")
+    lines.append("- 面板共 **991 个因子 / 34 个分组**（动量、均线偏离、超买超卖、趋势、波动率、"
+                 "量价、价格位置、收益形态、流动性、涨停基因、财务、规模、K线形态，以及外部因子："
+                 "Barra 风格与行业、分析师评级/目标价/一致预期、新闻情绪、集合竞价、逐笔成交与委托、"
+                 "Tick 深度、Transformer、量价 RL 等）。")
+    lines.append("- 需要其中某个因子的全市场 IC/分组收益时，可以让系统单独跑回测（较慢，约 1~2 分钟），"
+                 "不适合每轮自动执行；本工具给的是**因子暴露 + 横截面分位 + 环境判断**的快路径。")
+    lines.append("")
+    lines.append("> 分位含义：90% 表示该值高于全市场 90% 的股票。市值/成交额分位高说明是大票，"
+                 "换手/量比分位高说明资金关注度异常。")
     return "\n".join(lines)
