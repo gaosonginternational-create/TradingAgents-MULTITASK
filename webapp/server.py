@@ -844,7 +844,11 @@ def list_reports():
             continue
         # 从目录名解析 ticker 和日期，形如 SKHY_20261109_160242
         m = re.match(r"^([A-Za-z0-9.\-]+)_(\d{8})_(\d{6})$", name)
-        ticker = m.group(1) if m else name
+        # 命令行跑出来的目录带交易所后缀（000338.SZ），webapp 跑的不带（000338）。
+        # 前端按 ticker 分组，不归一化就会变成两只不同的"股票"，同一标的的
+        # 报告被拆到两个分组里、点进去只能看到其中一份。
+        ticker_raw = m.group(1) if m else name
+        ticker = _norm_ticker(ticker_raw)
         date_str = ""
         if m:
             date_str = f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:8]} {m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:6]}"
@@ -872,6 +876,7 @@ def list_reports():
         items.append({
             "id": name,
             "ticker": ticker,
+            "symbol": ticker_raw,
             "name": cn_name,
             "date": date_str,
             "rating": rating,

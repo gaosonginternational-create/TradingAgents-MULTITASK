@@ -151,7 +151,7 @@ async function loadTasks() {
     let onClick = '';
     let hint = '';
     if (t.status === 'done' || t.status === 'error') {
-      onClick = `onclick="openLatestReport('${t.ticker}')"`;
+      onClick = `onclick="openLatestReport('${t.ticker}','${t.date || ''}')"`;
       hint = ' title="点击查看该标的的最新报告"';
     } else if (t.status === 'running' || t.status === 'starting') {
       onClick = `onclick="openRunningTask('${t.id}','${t.ticker}','${t.date}')"`;
@@ -187,12 +187,18 @@ async function clearAllTasks() {
 }
 
 // 打开某 ticker 的最新报告（按 mtime 倒序取第一条）
-async function openLatestReport(ticker) {
+async function openLatestReport(ticker, date) {
   const data = await api('/api/reports?grouped=1');
   if (!data || !data.groups) return;
   const group = data.groups.find(g => g.ticker.toUpperCase() === ticker.toUpperCase());
   if (group && group.reports.length) {
-    openReport(group.reports[0].id, group.reports[0].ticker);
+    // 优先打开"同一天"的那份：任务记录点进去，应当看到当时那次运行的报告，
+    // 而不是该标的的最新报告（同一天可能跑过多次，跨天则完全不是一回事）。
+    const sameDay = date
+      ? group.reports.find(r => String(r.date || '').slice(0, 10) === String(date).slice(0, 10))
+      : null;
+    const target = sameDay || group.reports[0];
+    openReport(target.id, target.ticker);
   } else {
     alert(`未找到 ${ticker} 的历史报告`);
   }
