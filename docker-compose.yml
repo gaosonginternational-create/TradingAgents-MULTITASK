@@ -14,8 +14,8 @@ services:
       # 国内数据源（东财/新浪/巨潮/腾讯/同花顺）永远不走代理：它们本来就能直连，
       # 走代理反而会因 VPN 抖动一起挂掉（曾出现容器短暂失去到宿主代理的路由，
       # 东财全部 Network is unreachable）。NO_PROXY 与 no_proxy 两种拼写都设。
-      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,api.deepseek.com,.deepseek.com,api.stlouisfed.org,.stlouisfed.org,api.alphavantage.co,.alphavantage.co,.eastmoney.com,eastmoney.com,.sina.com.cn,sina.com.cn,.sina.com,cninfo.com.cn,.cninfo.com.cn,.qq.com,.baidu.com,.10jqka.com.cn,.hexun.com,.163.com
-      - no_proxy=localhost,127.0.0.1,host.docker.internal,api.deepseek.com,.deepseek.com,api.stlouisfed.org,.stlouisfed.org,api.alphavantage.co,.alphavantage.co,.eastmoney.com,eastmoney.com,.sina.com.cn,sina.com.cn,.sina.com,cninfo.com.cn,.cninfo.com.cn,.qq.com,.baidu.com,.10jqka.com.cn,.hexun.com,.163.com
+      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,172.17.0.1,eastmoney.com,.eastmoney.com,sina.com.cn,.sina.com.cn,sina.com,.sina.com,gtimg.cn,.gtimg.cn,10jqka.com.cn,.10jqka.com.cn,hexun.com,.hexun.com,163.com,.163.com,xueqiu.com,.xueqiu.com,sse.com.cn,.sse.com.cn,szse.cn,.szse.cn,cninfo.com.cn,.cninfo.com.cn,qq.com,.qq.com,baidu.com,.baidu.com,ifeng.com,.ifeng.com,deepseek.com,.deepseek.com,stlouisfed.org,.stlouisfed.org,alphavantage.co,.alphavantage.co
+      - no_proxy=localhost,127.0.0.1,host.docker.internal,172.17.0.1,eastmoney.com,.eastmoney.com,sina.com.cn,.sina.com.cn,sina.com,.sina.com,gtimg.cn,.gtimg.cn,10jqka.com.cn,.10jqka.com.cn,hexun.com,.hexun.com,163.com,.163.com,xueqiu.com,.xueqiu.com,sse.com.cn,.sse.com.cn,szse.cn,.szse.cn,cninfo.com.cn,.cninfo.com.cn,qq.com,.qq.com,baidu.com,.baidu.com,ifeng.com,.ifeng.com,deepseek.com,.deepseek.com,stlouisfed.org,.stlouisfed.org,alphavantage.co,.alphavantage.co
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

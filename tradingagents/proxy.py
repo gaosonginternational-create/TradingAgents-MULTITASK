@@ -49,21 +49,57 @@ _HOST_ALIASES = ["host.docker.internal", "172.17.0.1"]
 
 _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
 
-# Domestic data hosts must never be routed through the VPN. They are reachable
-# directly, and sending them through a flaky proxy means a dropped VPN takes
-# A-share quotes, statements and announcements down with it — seen when a
-# container briefly lost its route to the host proxy and every Eastmoney call
-# failed with "Network is unreachable" even though the site itself was fine.
-_DOMESTIC_NO_PROXY = (
+# ---------------------------------------------------------------------------
+# 分流规则：国内源直连，海外源走 VPN
+# ---------------------------------------------------------------------------
+# 这份清单是**唯一权威**。docker-compose.yml 里的 NO_PROXY 必须与它保持一致
+# （compose 只负责容器启动时的那一份，进程内由 _merge_no_proxy 兜底合并）。
+#
+# 为什么国内源绝不能走代理：
+#   东财/新浪/同花顺/交易所都在国内，直连几十毫秒；绕 VPN 要绕出去再回来，
+#   不仅慢，而且 VPN 一断这些 A 股数据立刻全挂（之前就出现过容器连不上
+#   host 代理、所有东财请求 "Network is unreachable" 的事故）。
+#   DeepSeek 也一样——它是国内 API，走 VPN 纯属自找麻烦。
+#
+# 为什么海外源必须走代理：
+#   雅虎/Reddit/StockTwits/Google 在境内要么不可达，要么被限流，
+#   不走代理就是超时和 403。
+DOMESTIC_HOSTS = (
+    # 本机与容器内部
+    "localhost", "127.0.0.1", "host.docker.internal", "172.17.0.1",
+    # 行情与资讯
     "eastmoney.com", ".eastmoney.com",
     "sina.com.cn", ".sina.com.cn", "sina.com", ".sina.com",
-    "cninfo.com.cn", ".cninfo.com.cn",
-    "qq.com", ".qq.com",
-    "baidu.com", ".baidu.com",
-    "10jqka.com.cn", ".10jqka.com.cn",
+    "gtimg.cn", ".gtimg.cn",              # 腾讯行情
+    "10jqka.com.cn", ".10jqka.com.cn",    # 同花顺资金流/行业
     "hexun.com", ".hexun.com",
     "163.com", ".163.com",
+    "xueqiu.com", ".xueqiu.com",
+    # 交易所与信息披露
+    "sse.com.cn", ".sse.com.cn",          # 上交所（ETF 份额）
+    "szse.cn", ".szse.cn",                # 深交所
+    "cninfo.com.cn", ".cninfo.com.cn",    # 巨潮资讯
+    # 其他国内站点
+    "qq.com", ".qq.com", "baidu.com", ".baidu.com", "ifeng.com", ".ifeng.com",
+    # 国内 LLM / 数据 API
+    "deepseek.com", ".deepseek.com",
+    # 少数可直连的海外数据源（实测直连更稳，走代理反而超时）
+    "stlouisfed.org", ".stlouisfed.org",  # FRED 宏观
+    "alphavantage.co", ".alphavantage.co",
 )
+
+# 仅作文档与自检用：这些必须走代理，绝不能出现在 NO_PROXY 里。
+OVERSEAS_HOSTS = (
+    "finance.yahoo.com", "query1.finance.yahoo.com", "query2.finance.yahoo.com",
+    "reddit.com", "www.reddit.com", "oauth.reddit.com",
+    "api.stocktwits.com",
+    "google.com", "translate.googleapis.com",
+    "github.com", "api.github.com",
+    "gamma-api.polymarket.com",
+)
+
+# 兼容旧名字
+_DOMESTIC_NO_PROXY = DOMESTIC_HOSTS
 
 
 def _merge_no_proxy() -> None:
@@ -71,7 +107,7 @@ def _merge_no_proxy() -> None:
     current = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
     items = [x.strip() for x in current.split(",") if x.strip()]
     lowered = {x.lower() for x in items}
-    for host in _DOMESTIC_NO_PROXY:
+    for host in DOMESTIC_HOSTS:
         if host.lower() not in lowered:
             items.append(host)
     value = ",".join(items)
