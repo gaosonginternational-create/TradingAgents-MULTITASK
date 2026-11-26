@@ -59,6 +59,11 @@ class NormalizedChatOpenAI(ChatOpenAI):
         # 强制超时。实测同一个 3 万字符请求直连 DeepSeek 只要 12 秒，
         # 所以问题在连接复用而不是模型。
         # 办法：不复用长连接（每次请求新建），代价是每次多一次 TLS 握手。
+        # 流式：DeepSeek 走 EdgeOne CDN，非流式时服务端要憋完整段才回包，
+        # 长时间没有字节下发会被 CDN 节点掐掉（表现为连接 established、
+        # 日志十几分钟不动、最后只能靠外层超时）。改成流式后 token 持续下发，
+        # 链路一直是活的，同时首字延迟也更快。
+        kwargs.setdefault("streaming", True)
         try:
             import httpx
 
@@ -66,7 +71,10 @@ class NormalizedChatOpenAI(ChatOpenAI):
                 kwargs["http_client"] = httpx.Client(
                     limits=httpx.Limits(max_keepalive_connections=0,
                                         max_connections=20),
-                    timeout=httpx.Timeout(600.0, connect=15.0),
+                    # 读超时压到 120s：实测正常请求 2~12 秒，卡住时是 TCP 层
+                    # 黑洞（连接 established 但永远不返回）。让它在 120 秒快速
+                    # 失败并重试，比干等 600 秒再放弃有效得多。
+                    timeout=httpx.Timeout(600.0, connect=15.0, read=120.0),
                 )
         except Exception:  # noqa: BLE001 - 没有 httpx 就退回默认行为
             pass
@@ -121,6 +129,23 @@ class NormalizedChatOpenAI(ChatOpenAI):
         raise last_exc  # type: ignore[misc]
 
     def _invoke_once(self, input, config, timeout, **kwargs):
+        import time as _time
+
+        started = _time.time()
+        size = len(str(input))
+        try:
+            return self._invoke_sized(input, config, timeout, **kwargs)
+        finally:
+            elapsed = _time.time() - started
+            model = getattr(self, "model_name", "?")
+            # 一次调用超过 60 秒就值得记录：正常 2 万 token 只需 3~12 秒，
+            # 出现几十秒说明提供商在排队或链路异常，事后能对着日志定位。
+            if elapsed > 60:
+                logger.warning("slow LLM call: model=%s input=%d chars elapsed=%.0fs", model, size, elapsed)
+            else:
+                logger.info("LLM call: model=%s input=%d chars elapsed=%.1fs", model, size, elapsed)
+
+    def _invoke_sized(self, input, config, timeout, **kwargs):
         if timeout and timeout > 0:
             import concurrent.futures
             ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)

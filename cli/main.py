@@ -1,3 +1,4 @@
+import faulthandler
 import sys
 from enum import StrEnum
 from typing import Annotated
@@ -6,6 +7,10 @@ import typer
 from rich.markup import escape
 
 from cli.display import console
+
+# 挂死时（TCP 层黑洞，请求永远不返回）没有任何异常可抓，只能靠转储线程栈定位。
+# 用 `docker kill -s ABRT <容器>` 触发，会打印所有线程的调用栈到 stderr。
+faulthandler.enable()
 from cli.models import AnalystType, AssetType
 from cli.prompts import filter_analysts_for_asset_type, parse_analysts
 from cli.run import run_analysis
