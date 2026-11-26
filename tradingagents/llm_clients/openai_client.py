@@ -52,6 +52,36 @@ class NormalizedChatOpenAI(ChatOpenAI):
     timeout_retries: int = 1
     empty_response_backoff: float = 1.0
 
+    def __init__(self, **kwargs):
+        # 走代理时最要命的一类挂起：VPN 把空闲的 keep-alive 连接掐掉，httpx
+        # 复用这条死连接后收不到任何字节，而它的 read timeout 在某些代理下
+        # 不触发（本文件既有注释也印证过），于是请求一直挂着直到外层 300 秒
+        # 强制超时。实测同一个 3 万字符请求直连 DeepSeek 只要 12 秒，
+        # 所以问题在连接复用而不是模型。
+        # 办法：不复用长连接（每次请求新建），代价是每次多一次 TLS 握手。
+        try:
+            import httpx
+
+            if "http_client" not in kwargs and "http_async_client" not in kwargs:
+                kwargs["http_client"] = httpx.Client(
+                    limits=httpx.Limits(max_keepalive_connections=0,
+                                        max_connections=20),
+                    timeout=httpx.Timeout(600.0, connect=15.0),
+                )
+        except Exception:  # noqa: BLE001 - 没有 httpx 就退回默认行为
+            pass
+        super().__init__(**kwargs)
+
+    def _reset_http_client(self) -> None:
+        """Drop pooled connections so a retry never reuses a dead socket."""
+        for attr in ("_client", "client", "root_client"):
+            client = getattr(self, attr, None)
+            if client is not None and hasattr(client, "close"):
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
     def invoke(self, input, config=None, **kwargs):
         # Hard timeout wrapper: deepseek reasoning models occasionally accept a
         # request and then stall mid-body (no chunk, no close) under a full
@@ -76,6 +106,7 @@ class NormalizedChatOpenAI(ChatOpenAI):
                 last_exc = exc
                 if attempt >= min(retries, getattr(self, "timeout_retries", 1)):
                     raise
+                self._reset_http_client()
                 delay = max(5.0, backoff * (2 ** attempt) * 5)
                 logger.warning(
                     "LLM request timed out (%s, %.0fs) on attempt %d/%d; retrying in %.0fs",
