@@ -45,17 +45,52 @@ FINGPT_URL = os.getenv(
 REQUEST_TIMEOUT = 120  # local 13B inference can take a while on cold start
 
 
+def health() -> dict | None:
+    """GET /api/health — tells "not started" apart from "still loading models".
+
+    13B LoRA 在这台机器上冷启动要几十秒到几分钟，期间端口已经在监听、但
+    推理请求会失败。原来的实现一律报"unreachable"，看起来像服务没开，
+    很容易误判成地址写错——先问一次健康检查就能说清楚。
+    """
+    try:
+        resp = requests.get(f"{FINGPT_URL}/api/health", timeout=8)
+        if resp.status_code == 200:
+            return resp.json()
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
 def _post(path: str, payload: dict) -> dict:
-    """POST to the local FinGPT service; raise OSError on any failure."""
+    """POST to the local FinGPT service; raise OSError with an actionable reason."""
     url = f"{FINGPT_URL}{path}"
     try:
         resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
+    except requests.HTTPError as exc:
+        # 服务是活的，返回了 4xx/5xx（多半是模型还在加载或显存不足）。
+        status = getattr(exc.response, "status_code", "?")
+        body = ""
+        try:
+            body = (exc.response.text or "")[:160]
+        except Exception:  # noqa: BLE001
+            pass
+        info = health() or {}
+        raise OSError(
+            f"FinGPT 服务可达但 {path} 返回 HTTP {status}"
+            + (f"（loaded_model={info.get('loaded_model')}, vram={info.get('vram_used_gb')}GB）"
+               if info else "（健康检查也不通，模型可能正在加载）")
+            + (f"；响应：{body}" if body else "")
+        ) from None
     except requests.RequestException as exc:
-        raise OSError(f"FinGPT service unreachable ({url}): {exc}") from None
+        # 连不上：要么服务没起，要么端口/地址不对。
+        hint = ("健康检查通过但该接口请求失败" if health() else
+                f"端口无响应（{FINGPT_URL}）——请确认 启动FinGPT.bat 正在运行、"
+                "窗口内无报错，且端口是 7860")
+        raise OSError(f"FinGPT 不可达：{hint}；{type(exc).__name__}") from None
     except ValueError:
-        raise OSError("FinGPT returned non-JSON response") from None
+        raise OSError("FinGPT 返回了非 JSON 响应（可能命中了别的服务）") from None
 
 
 def get_fingpt_sentiment(texts: list[str]) -> str:
