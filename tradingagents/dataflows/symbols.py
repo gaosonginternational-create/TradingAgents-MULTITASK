@@ -163,6 +163,22 @@ def normalize_symbol(raw: str) -> str:
 _TICKER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-\^=+]+$")
 
 
+def report_dir_symbol(ticker: str) -> str:
+    """The ticker as it appears in a report folder name.
+
+    A 股去掉交易所后缀：``000338.SZ`` → ``000338``。原因是同一个标的可能从
+    两条路径进来——webapp 传的是 ``000338``，数据层解析后变成 ``000338.SZ``，
+    于是报告目录出现两种命名，前端按 ticker 分组时把它们当成两只股票，
+    历史报告被拆成两组、点任务记录还可能打开另一天的报告。
+
+    港股/美股保持原样：``00700.HK`` 去掉后缀会变成 ``00700``，与 A 股代码
+    空间重叠，反而制造新的歧义。
+    """
+    t = (ticker or "").strip().upper()
+    m = re.fullmatch(r"(\d{6})\.(SZ|SH|SS|BJ)", t)
+    return m.group(1) if m else t
+
+
 def safe_ticker_component(value: str, *, max_len: int = 32) -> str:
     """Validate ``value`` is safe to interpolate into a filesystem path.
 

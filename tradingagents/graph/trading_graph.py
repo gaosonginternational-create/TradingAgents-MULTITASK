@@ -12,7 +12,7 @@ from tradingagents.agents.context import build_instrument_context, resolve_instr
 from tradingagents.agents.rating import run_rating
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import CN_TZ, get_current_date, is_historical
-from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.symbols import report_dir_symbol, safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_tier_client, tier_provider
 from tradingagents.memory import TradingMemoryLog, settlement
@@ -288,7 +288,9 @@ class TradingAgentsGraph:
     def default_report_path(self, ticker) -> Path:
         """Where a run's reports go unless told otherwise: under results_dir, stamped now (Beijing time)."""
         stamp = datetime.now(CN_TZ).strftime("%Y%m%d_%H%M%S")
-        return Path(self.config["results_dir"]) / "reports" / f"{safe_ticker_component(ticker)}_{stamp}"
+        # 目录名用归一化后的标的（A 股去掉 .SZ/.SH），与 webapp 侧保持一致
+        name = report_dir_symbol(ticker)
+        return Path(self.config["results_dir"]) / "reports" / f"{safe_ticker_component(name)}_{stamp}"
 
     def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
         """Build a run's initial state; propagate() and the CLI both start here.
