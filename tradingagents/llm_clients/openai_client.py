@@ -47,6 +47,9 @@ class NormalizedChatOpenAI(ChatOpenAI):
 
     # Retries for an empty/unparseable response body (transient backend fault).
     empty_response_retries: int = 3
+    # 超时重试与"空响应"分开计数：一次超时就是 300 秒，沿用 3 次会把单轮分析
+    # 拖到 20 分钟。默认只补一次，够覆盖偶发卡顿。
+    timeout_retries: int = 1
     empty_response_backoff: float = 1.0
 
     def invoke(self, input, config=None, **kwargs):
@@ -65,6 +68,21 @@ class NormalizedChatOpenAI(ChatOpenAI):
             try:
                 result = self._invoke_once(input, config, timeout, **kwargs)
                 return result
+            except TimeoutError as exc:
+                # 提供商偶发卡住（长提示、服务端拥塞）时，整轮分析不该因此报废：
+                # 一次分析要跑十几个节点、十几分钟，最后一个请求超时就把整份
+                # 报告丢掉太亏。重连后通常立刻就能过——原实现只重试"空响应"，
+                # 超时被漏掉了。
+                last_exc = exc
+                if attempt >= min(retries, getattr(self, "timeout_retries", 1)):
+                    raise
+                delay = max(5.0, backoff * (2 ** attempt) * 5)
+                logger.warning(
+                    "LLM request timed out (%s, %.0fs) on attempt %d/%d; retrying in %.0fs",
+                    getattr(self, "model_name", "?"), timeout or 0,
+                    attempt + 1, retries + 1, delay,
+                )
+                time.sleep(delay)
             except ValueError as exc:
                 if not _is_empty_response(exc) or attempt >= retries:
                     raise
@@ -92,7 +110,8 @@ class NormalizedChatOpenAI(ChatOpenAI):
                     return normalize_content(fut.result(timeout=timeout))
                 except concurrent.futures.TimeoutError:
                     raise TimeoutError(
-                        f"LLM request exceeded {timeout:.0f}s (provider stalled); aborting"
+                        f"LLM request exceeded {timeout:.0f}s (provider stalled) "
+                        f"[model={getattr(self, 'model_name', '?')}]"
                     )
             finally:
                 ex.shutdown(wait=False)  # never block on the hung request
