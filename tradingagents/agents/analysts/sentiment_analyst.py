@@ -47,7 +47,40 @@ from tradingagents.dataflows.vendors.akshare.orderbook import get_orderbook
 from tradingagents.dataflows.vendors.akshare.national_team import get_national_team_flow
 from tradingagents.dataflows.vendors.akshare.wechat import get_wechat_news
 from tradingagents.dataflows.vendors.local_knowledge import fetch_local_knowledge
-from tradingagents.dataflows.vendors.fingpt import get_fingpt_sentiment
+from tradingagents.dataflows.vendors.fingpt import get_fingpt_sentiment, needs_translation
+
+
+def _translate_for_fingpt(llm, headlines: list[str]) -> list[str]:
+    """Translate Chinese headlines to English for FinGPT scoring.
+
+    FinGPT-Sentiment 是英文财经推文微调的 13B LoRA，对中文头条基本判不准
+    （实测"净利润同比增长20%"被判为中性）。用流水线自己的 LLM 翻一遍再打分，
+    比依赖外部免费翻译接口稳（那个要翻墙、会超时），代价是一次很小的调用。
+    翻译失败就退回原文——宁可标签不准，也不要整块缺失。
+    """
+    if not headlines:
+        return headlines
+    numbered = "\n".join(f"{i + 1}. {h}" for i, h in enumerate(headlines))
+    prompt = (
+        "Translate each numbered Chinese financial headline into concise English. "
+        "Keep numbers, percentages, tickers and company names unchanged. "
+        "Return ONLY a JSON array of strings in the same order, with exactly the same "
+        "number of items, no commentary and no markdown fences.\n\n" + numbered
+    )
+    try:
+        resp = llm.invoke(prompt)
+        raw = resp.content if hasattr(resp, "content") else str(resp)
+        start, end = raw.find("["), raw.rfind("]")
+        if start < 0 or end <= start:
+            return headlines
+        import json as _json
+
+        translated = _json.loads(raw[start:end + 1])
+        if isinstance(translated, list) and len(translated) == len(headlines):
+            return [str(x) for x in translated]
+    except Exception:  # noqa: BLE001 - 翻译是增强项，失败不阻断
+        pass
+    return headlines
 
 
 def _extract_news_headlines(news_block: str, limit: int = 15) -> list[str]:
@@ -164,7 +197,11 @@ def create_sentiment_analyst(llm):
         fingpt_sentiment_block = ""
         try:
             headlines = _extract_news_headlines(news_block)
-            fingpt_sentiment_block = get_fingpt_sentiment(headlines)
+            # 中文头条先翻成英文再打分，展示仍用原文
+            scoring_texts = (_translate_for_fingpt(llm, headlines)
+                             if headlines and needs_translation(headlines) else headlines)
+            fingpt_sentiment_block = get_fingpt_sentiment(
+                scoring_texts, display_texts=headlines if scoring_texts is not headlines else None)
         except Exception:
             fingpt_sentiment_block = ""
         # 本地知识库（IMA 资料落地）——用户自有的研报/公众号文章/笔记，

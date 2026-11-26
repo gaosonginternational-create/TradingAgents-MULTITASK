@@ -17,6 +17,7 @@ US chip demand" — instead of naively extrapolating overseas sector trends.
 from __future__ import annotations
 
 import logging
+import time
 
 from tradingagents.dataflows.vendors.akshare.common import ak_retry, is_a_share, is_etf
 from tradingagents.dataflows.vendors.akshare.etf_industry import get_etf_holdings
@@ -76,11 +77,23 @@ def get_revenue_geo(ticker: str) -> dict | None:
     prefix = "SH" if ticker[0] in ("5", "6", "9") else "SZ"
     symbol = f"{prefix}{ticker}"
 
-    try:
-        df = ak_retry(lambda: ak.stock_zygc_em(symbol=symbol))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Revenue geo lookup failed for %s: %s", ticker, e)
-        return None
+    # 东财 PC_HSF10 的 PageAjax 在限流或参数异常时返回 {"status","message"}
+    # 而不是 {"zygcfx": [...]}，akshare 内部取 data["zygcfx"] 就会抛 KeyError。
+    # 这是临时性的，重试一次通常就恢复；仍失败则只记 debug——营收地区构成是
+    # 可选增强项，不值得在每轮分析里刷 warning。
+    df = None
+    for attempt in (1, 2):
+        try:
+            df = ak_retry(lambda: ak.stock_zygc_em(symbol=symbol))
+            break
+        except KeyError as e:
+            if attempt == 2:
+                logger.debug("Revenue geo unavailable for %s (Eastmoney returned no zgcfx: %s)", ticker, e)
+                return None
+            time.sleep(2)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Revenue geo lookup failed for %s: %s", ticker, e)
+            return None
 
     if df is None or df.empty or "分类类型" not in df.columns:
         return None

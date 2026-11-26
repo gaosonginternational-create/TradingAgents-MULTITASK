@@ -93,7 +93,22 @@ def _post(path: str, payload: dict) -> dict:
         raise OSError("FinGPT 返回了非 JSON 响应（可能命中了别的服务）") from None
 
 
-def get_fingpt_sentiment(texts: list[str]) -> str:
+def needs_translation(texts: list[str]) -> bool:
+    """True when the batch is predominantly Chinese.
+
+    FinGPT-Sentiment is a Llama2-13B LoRA tuned on **English** financial tweets;
+    on Chinese headlines it degrades to near-constant labels (实测 "净利润同比
+    增长20%" 被判为中性). Scoring a translated copy is the only way to get a
+    usable read out of it for A-share news.
+    """
+    text = " ".join(texts or [])
+    if not text:
+        return False
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    return cjk >= max(4, len(text) * 0.15)
+
+
+def get_fingpt_sentiment(texts: list[str], display_texts: list[str] | None = None) -> str:
     """Score a list of news headlines for sentiment via FinGPT-Sentiment.
 
     Returns a markdown block listing each headline and its FinGPT label
@@ -106,6 +121,10 @@ def get_fingpt_sentiment(texts: list[str]) -> str:
     try:
         data = _post("/api/sentiment", {"texts": texts})
         results = data.get("results", [])
+        # 打分用英文（模型只认英文），展示用原文，避免中文报告里跳出一堆英文标题。
+        if display_texts and len(display_texts) == len(results):
+            for r, orig in zip(results, display_texts):
+                r["display"] = orig
     except OSError as e:
         return f"### FinGPT 情绪评分：<unavailable: {e}>\n"
 
@@ -130,7 +149,8 @@ def get_fingpt_sentiment(texts: list[str]) -> str:
             mark = "中性"
         else:
             mark = label or "?"
-        snippet = text[:120] + ("…" if len(text) > 120 else "")
+        shown = item.get("display") or text
+        snippet = shown[:120] + ("…" if len(shown) > 120 else "")
         lines.append(f"- [{mark}] {snippet}")
     total = pos + neg + neu
     if total:
