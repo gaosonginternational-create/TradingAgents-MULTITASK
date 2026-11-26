@@ -540,6 +540,66 @@ def _rebuild_tasks_from_reports():
     return rebuilt
 
 
+
+def _norm_ticker(t: str) -> str:
+    return re.sub(r"\.(SZ|SH|SS|HK|BJ)$", "", (t or "").upper())
+
+
+def _import_cli_runs(window_seconds: int = 600) -> int:
+    """把"没有对应任务记录"的报告补进历史任务列表。
+
+    命令行直接跑（python -m cli ...）或定时脚本跑的标的，只会在
+    data/logs/reports/ 下留一份报告，不会经过 webapp 的任务表，于是
+    "任务记录"里看不到、只能去"历史报告"里找。这里做一次增量对账：
+    报告目录的时间戳若与已有任务都不接近（默认 10 分钟），就补一条
+    status=done 的记录，并标记 source=cli。
+    """
+    global TASKS_HISTORY
+    if not os.path.isdir(REPORTS_DIR):
+        return 0
+    with TASKS_LOCK:
+        known_times = [float(t.get("created_at") or 0)
+                       for t in list(TASKS_HISTORY.values()) + list(RUNNING_TASKS.values())]
+        existing = set(TASKS_HISTORY) | set(RUNNING_TASKS)
+    added = {}
+    for name in os.listdir(REPORTS_DIR):
+        d = os.path.join(REPORTS_DIR, name)
+        if not os.path.isdir(d):
+            continue
+        m = re.match(r"^([A-Za-z0-9.\-]+)_(\d{8})_(\d{6})$", name)
+        if not m:
+            continue
+        if not (os.path.exists(os.path.join(d, "complete_report.md"))
+                or os.path.exists(os.path.join(d, "complete_report.html"))):
+            continue
+        try:
+            ts = datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S").timestamp()
+        except Exception:
+            ts = os.path.getmtime(d)
+        task_id = "report-" + name
+        if task_id in existing:
+            continue
+        # 时间上贴近某条已有任务，说明就是同一次运行，不重复登记
+        if any(abs(ts - k) < window_seconds for k in known_times if k):
+            continue
+        added[task_id] = {
+            "ticker": _norm_ticker(m.group(1)),
+            "date": f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:8]}",
+            "analysts": "market,sentiment,news,fundamentals",
+            "status": "done",
+            "exit_code": 0,
+            "created_at": ts,
+            "finished_at": ts,
+            "source": "cli",
+        }
+    if added:
+        with TASKS_LOCK:
+            TASKS_HISTORY.update(added)
+        _write_tasks_file(TASKS_HISTORY)
+        logger.info("从报告目录补登 %d 条任务记录", len(added))
+    return len(added)
+
+
 def _write_tasks_file(data):
     """把任务元数据字典写入磁盘"""
     try:
@@ -573,6 +633,10 @@ def _save_tasks_history():
 
 
 TASKS_HISTORY = _load_tasks_history()  # task_id -> 轻量元数据（重启后仍可读）
+try:
+    _import_cli_runs()
+except Exception:
+    pass
 
 
 # ================= 定时任务 =================
@@ -1159,6 +1223,10 @@ class Handler(BaseHTTPRequestHandler):
 
         # API：任务列表
         if path == "/api/tasks":
+            try:
+                _import_cli_runs()
+            except Exception:
+                pass
             with TASKS_LOCK:
                 # 合并磁盘历史任务 + 内存运行任务（内存态优先，覆盖同 id）
                 merged = dict(TASKS_HISTORY)
@@ -1310,6 +1378,10 @@ class Handler(BaseHTTPRequestHandler):
 
         # 清空全部任务记录
         if path == "/api/tasks":
+            try:
+                _import_cli_runs()
+            except Exception:
+                pass
             with TASKS_LOCK:
                 for tid in list(RUNNING_TASKS.keys()):
                     if RUNNING_TASKS[tid].get("status") in ("running", "starting"):
