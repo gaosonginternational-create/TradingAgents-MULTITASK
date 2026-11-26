@@ -161,5 +161,20 @@ def create_tier_client(config: dict, tier: str, **extra) -> BaseLLMClient:
     else:
         base_url = config.get(f"{tier}_think_backend_url")
     kwargs = build_llm_kwargs({**config, "llm_provider": provider})
+
+    # 深思考模型比快思考慢一个数量级：实测同一个 2 万 token 的输入，
+    # deepseek-flash 12 秒、deepseek-v4-pro 83 秒（其中 2566 个推理 token），
+    # 而研究主管/最终决策要求输出更长，会顶到 300 秒的统一超时线。给 deep
+    # 档单独放宽（默认 llm_timeout 的 2 倍），避免正常推理被当成"假死"。
+    if tier == "deep":
+        base_timeout = kwargs.get("timeout")
+        deep_timeout = config.get("deep_think_timeout") or config.get("llm_timeout")
+        if deep_timeout not in (None, ""):
+            try:
+                kwargs["timeout"] = float(deep_timeout) * 2
+            except (TypeError, ValueError):
+                pass
+        elif base_timeout:
+            kwargs["timeout"] = float(base_timeout) * 2
     return create_llm_client(provider=provider, model=config[f"{tier}_think_llm"], base_url=base_url,
                              **kwargs, **extra)

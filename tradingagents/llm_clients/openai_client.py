@@ -72,16 +72,6 @@ class NormalizedChatOpenAI(ChatOpenAI):
             pass
         super().__init__(**kwargs)
 
-    def _reset_http_client(self) -> None:
-        """Drop pooled connections so a retry never reuses a dead socket."""
-        for attr in ("_client", "client", "root_client"):
-            client = getattr(self, attr, None)
-            if client is not None and hasattr(client, "close"):
-                try:
-                    client.close()
-                except Exception:  # noqa: BLE001
-                    pass
-
     def invoke(self, input, config=None, **kwargs):
         # Hard timeout wrapper: deepseek reasoning models occasionally accept a
         # request and then stall mid-body (no chunk, no close) under a full
@@ -106,7 +96,6 @@ class NormalizedChatOpenAI(ChatOpenAI):
                 last_exc = exc
                 if attempt >= min(retries, getattr(self, "timeout_retries", 1)):
                     raise
-                self._reset_http_client()
                 delay = max(5.0, backoff * (2 ** attempt) * 5)
                 logger.warning(
                     "LLM request timed out (%s, %.0fs) on attempt %d/%d; retrying in %.0fs",
